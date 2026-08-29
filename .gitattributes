@@ -1,0 +1,9 @@
+# Source and prose check out with LF everywhere.
+* text=auto eol=lf
+
+# The manifest records a SHA-256 for every file in results/, so those files must
+# survive a clone byte for byte. Marked binary: no end-of-line conversion on any
+# platform. This rule comes last so it overrides the blanket rule above.
+results/** -text
+*.pdf binary
+*.png binary

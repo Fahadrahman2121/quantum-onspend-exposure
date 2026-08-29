@@ -1,0 +1,22 @@
+{
+  "suite": "full",
+  "seeds": 30,
+  "model": "qsentry_sim.py",
+  "files": {
+    "floor.pdf": "d6d372e0262e02ee98f76ddb95881e9dacccc5476f596532001b0a60d5efd4c4",
+    "floor.png": "8b139819e181e226842b8b6e166a3acb9a434d661eb3fb10467527e29761dce7",
+    "migration.pdf": "ded065368443b27db46f07a413c962eb9d0c2886619c6dd1ec00fbfef9a35031",
+    "migration.png": "6f2b7e05f1891d7036cf5da3ead72196084be45c937b30c1c2afaf26a1d57a4c",
+    "paradox.pdf": "ce502e4873abf8093ad41a9e31d6239473bc770460861894bf136a0a7e6a7d78",
+    "paradox.png": "16ff4fb1a3070e0a5ed5d840b54c4a1a167f81b23bc89a2b963fa43ec5ecad22",
+    "provisioning.pdf": "06dc7d0f51144ec3a81b8ee63d087eaff9d43d4a3aca968edfc81b95e3ed02ec",
+    "provisioning.png": "9c3d8563f55809eef6da9636edb7159e8b08f4253c5a9e1efc422d0df9bebf40",
+    "results.csv": "6272f9c8e7a6668cf6839fffacb92b2199d6fa361a1d7f9f3400641f195af485",
+    "statistical_tests.csv": "f4d616550bf1f0fc7e47978d6af51b2ae3f645ea59f08279e07853029614d5fd",
+    "summary.csv": "a071d5deaa551d96d4690c613129d5363f2bb7fb4090d0e127fe79f0d81a3da4",
+    "trace.pdf": "c1bc95688f717f7994eef696340c0b4d556ed053bc492d1d500e0e8327651ef0",
+    "trace.png": "88211ee377eab5007290a13f9f9c8dd483f13ba7b2d1a5afc64152bbfa0e6ca3",
+    "trace_ecdsa.csv": "e37b425aa4f973c8d55c9ff3db635f171dfee6f243c9df88eb9f09f685e5260c",
+    "trace_qsentry.csv": "0fb930fd53f13d5f74ec9a6c52a47402c6b4110747e943b24ecd65036d420a6b"
+  }
+}

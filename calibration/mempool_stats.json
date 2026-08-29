@@ -1,0 +1,26 @@
+{
+  "retrieved": "2026-08-30",
+  "source": "https://api.blockchain.info/charts/mempool-size?timespan=180days&format=json",
+  "series": "Bitcoin mempool size, bytes",
+  "note": "Retrieved through a browser because the collecting machine sat behind a TLS-intercepting proxy. Re-derive with mempool_burstiness.py; live data will have moved since.",
+  "statistics": {
+    "samples": 1440,
+    "span_days": 179.9,
+    "sample_interval_min": 180,
+    "mean_MB": 7.89,
+    "median_MB": 0.99,
+    "sd_MB": 13.38,
+    "coefficient_of_variation": 1.697,
+    "p95_over_median": 37.7,
+    "max_over_median": 47.0,
+    "fraction_above_2x_median": 0.326,
+    "mean_surge_length_hours": 16.2
+  },
+  "model_comparison": {
+    "paper_surge_multiplier": 4.0,
+    "paper_surge_fraction": 0.185,
+    "observed_p95_over_median": 37.7,
+    "observed_fraction_above_2x_median": 0.326,
+    "conclusion": "The modelled demand is markedly less bursty than the observed series on both axes, so the exposure effects reported in the paper are conservative with respect to this chain."
+  }
+}
