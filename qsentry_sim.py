@@ -131,6 +131,10 @@ def simulate(config: Config, keep_trace: bool = False):
     # aggregated into (time, count, credential) groups to keep the suite fast.
     mempool: deque[list] = deque()
     pending_bytes = 0.0
+    # Tracked incrementally rather than summed each slot: under an
+    # infeasible target the mempool is unbounded and an O(n) scan per slot
+    # would make the suite quadratic in a regime the model expects to visit.
+    pending_tx = 0
 
     edges = np.linspace(0.0, 3600.0, 1801)
     hist = np.zeros(len(edges) - 1, dtype=np.int64)
@@ -155,6 +159,7 @@ def simulate(config: Config, keep_trace: bool = False):
             # and windows describe the measured interval rather than carry-over.
             mempool.clear()
             pending_bytes = 0.0
+            pending_tx = 0
 
         # ---------------- arrivals and credential assignment ----------------
         if slot % config.slots_per_block == 0:
@@ -198,6 +203,7 @@ def simulate(config: Config, keep_trace: bool = False):
                 cred = best[1]
                 mempool.append([now, count, CRED_NAMES.index(cred), size[cred]])
                 pending_bytes += count * size[cred]
+                pending_tx += count
                 if measuring:
                     cred_counts[CRED_NAMES.index(cred)] += count
 
@@ -240,6 +246,7 @@ def simulate(config: Config, keep_trace: bool = False):
                 budget -= take * per
                 vbudget -= take * rel
                 pending_bytes -= take * per
+                pending_tx -= take
                 window = (now + slot_s) - arrival
                 name = CRED_NAMES[cred_i]
                 risky = CREDENTIALS[name]["vulnerable"] and window > config.break_time_s
@@ -272,7 +279,7 @@ def simulate(config: Config, keep_trace: bool = False):
             virtual = max(0.0, virtual + excess / max(config.arrival_rate, 1.0))
 
         if measuring:
-            backlog_area += sum(e[1] for e in mempool) * slot_s
+            backlog_area += pending_tx * slot_s
         if keep_trace and slot % config.slots_per_block == 0:
             rate = config.block_bytes / config.block_interval_s
             drain = pending_bytes / rate
@@ -284,7 +291,7 @@ def simulate(config: Config, keep_trace: bool = False):
                              if CREDENTIALS[CRED_NAMES[e[2]]]["vulnerable"])
             vuln_drain = vuln_bytes / rate
             trace.append({"time_s": now,
-                          "pending_tx": sum(e[1] for e in mempool),
+                          "pending_tx": pending_tx,
                           "drain_s": drain,
                           "vulnerable_drain_s": vuln_drain,
                           "predicted_window_s": 0.5 * config.block_interval_s + drain,

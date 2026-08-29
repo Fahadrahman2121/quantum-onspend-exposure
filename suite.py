@@ -96,7 +96,7 @@ def run(out_dir: Path, seeds: int, quick: bool):
                  arrival_rate=rate, exposure_target=eps)
 
     data = pd.DataFrame(rows)
-    data.to_csv(out_dir / "results.csv", index=False)
+    data.to_csv(out_dir / "results.csv", index=False, lineterminator="\n")
 
     metrics = ["inclusion_ratio", "at_risk_fraction", "at_risk_fraction_legacy",
                "window_mean_s", "window_p95_s", "window_legacy_mean_s",
@@ -109,7 +109,7 @@ def run(out_dir: Path, seeds: int, quick: bool):
              "exposure_target"]
     summary = data.groupby(group, dropna=False)[metrics].agg(["mean", ci95]).reset_index()
     summary.columns = ["_".join(str(x) for x in c if x).rstrip("_") for c in summary.columns]
-    summary.to_csv(out_dir / "summary.csv", index=False)
+    summary.to_csv(out_dir / "summary.csv", index=False, lineterminator="\n")
 
     def panel(ax, experiment, key, metric, policies, xlabel, ylabel, logx=False):
         sub = data[data.experiment == experiment]
@@ -196,10 +196,10 @@ def run(out_dir: Path, seeds: int, quick: bool):
     # Figure 5: a representative trace through two demand surges
     _, trace = simulate(Config(policy="qsentry", seed=2026, arrival_rate=38.0),
                         keep_trace=True)
-    trace.to_csv(out_dir / "trace_qsentry.csv", index=False)
+    trace.to_csv(out_dir / "trace_qsentry.csv", index=False, lineterminator="\n")
     _, base = simulate(Config(policy="ecdsa-only", seed=2026, arrival_rate=38.0),
                        keep_trace=True)
-    base.to_csv(out_dir / "trace_ecdsa.csv", index=False)
+    base.to_csv(out_dir / "trace_ecdsa.csv", index=False, lineterminator="\n")
     fig, ax = plt.subplots(figsize=(7.2, 2.4))
     ax.plot(base.time_s, base.vulnerable_window_s, color="#9aa0a6",
             linewidth=1.2, label="ECDSA only")
@@ -240,12 +240,16 @@ def run(out_dir: Path, seeds: int, quick: bool):
                           "p_value": pv, "mean_qsentry": a.mean(),
                           "mean_baseline": b.mean(),
                           "cohens_d": (a.mean() - b.mean()) / pooled if pooled else float("nan")})
-    pd.DataFrame(tests).to_csv(out_dir / "statistical_tests.csv", index=False)
+    pd.DataFrame(tests).to_csv(out_dir / "statistical_tests.csv", index=False,
+                               lineterminator="\n")
 
+    # CSVs are written with explicit LF and figures carry no timestamp, so
+    # every digest below reproduces on any platform, not just this one.
     manifest = {"suite": "quick" if quick else "full", "seeds": len(list(sr)),
                 "model": "qsentry_sim.py", "files": {}}
     for path in sorted(out_dir.iterdir()):
         if path.is_file() and path.name != "manifest.json":
             manifest["files"][path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
-    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    (out_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8", newline="\n")
     return data
