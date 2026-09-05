@@ -87,6 +87,21 @@ def run(out_dir: Path, seeds: int, quick: bool):
         for p in ("ecdsa-only", "qsentry"):
             _run(rows, "burstiness", sr, policy=p, arrival_rate=38.0, surge_multiplier=sm)
 
+    # Burstiness at FIXED MEAN load.  The sweep above holds the between-surge
+    # rate fixed, so the long-run mean offered load rises with the multiplier
+    # and the two effects are confounded.  Here the between-surge rate is
+    # scaled so that the long-run mean stays constant: 38 tx/s (65% of the
+    # 58.7 tx/s ECDSA capacity) and 30 tx/s (51%).  Only the shape of demand
+    # changes, which is the claim the paper's premise rests on.
+    c0 = Config()
+    pi_surge = c0.surge_enter / (c0.surge_enter + c0.surge_leave)
+    for mean in (38.0, 30.0):
+        for sm in (1.0, 2.0, 4.0, 6.0):
+            base = mean / (1.0 + pi_surge * (sm - 1.0))
+            for p in ("ecdsa-only", "qsentry"):
+                _run(rows, "burstiness-mean%d" % int(mean), sr, policy=p,
+                     arrival_rate=base, surge_multiplier=sm)
+
     # Does the virtual queue actually enforce the target?  Theorem 4 promises
     # this only when a policy meeting it exists, so we sweep epsilon at a load
     # where one does (26 tx/s) and at a load where none does (38 tx/s).
@@ -131,11 +146,11 @@ def run(out_dir: Path, seeds: int, quick: bool):
     # Figure 1: the migration paradox under congestion
     fig, axes = plt.subplots(1, 3, figsize=(7.2, 2.4))
     panel(axes[0], "congestion", "arrival_rate", "at_risk_fraction", MAIN,
-          "Offered load (tx/s)", "At risk, all traffic")
+          r"Between-surge load $\lambda_0$ (tx/s)", "At risk, all traffic")
     panel(axes[1], "congestion", "arrival_rate", "at_risk_fraction_legacy", MAIN,
-          "Offered load (tx/s)", "At risk, un-migratable")
+          r"Between-surge load $\lambda_0$ (tx/s)", "At risk, un-migratable")
     panel(axes[2], "congestion", "arrival_rate", "inclusion_ratio", MAIN,
-          "Offered load (tx/s)", "Inclusion ratio")
+          r"Between-surge load $\lambda_0$ (tx/s)", "Inclusion ratio")
     axes[0].legend(fontsize=6, frameon=False)
     fig.tight_layout()
     fig.savefig(out_dir / "paradox.pdf", **PDF)
@@ -184,8 +199,9 @@ def run(out_dir: Path, seeds: int, quick: bool):
     panel(axes[0], "provisioning", "block_bytes", "at_risk_fraction_legacy",
           ("ecdsa-only", "falcon-only", "qsentry"),
           "Block capacity (bytes)", "At risk, un-migratable")
-    panel(axes[1], "burstiness", "surge_multiplier", "at_risk_fraction_legacy",
-          ("ecdsa-only", "qsentry"), "Surge multiplier", "At risk, un-migratable")
+    panel(axes[1], "burstiness-mean38", "surge_multiplier", "at_risk_fraction_legacy",
+          ("ecdsa-only", "qsentry"), "Surge multiplier (mean load 38 tx/s)",
+          "At risk, un-migratable")
     axes[0].legend(fontsize=6, frameon=False)
     axes[1].legend(fontsize=6, frameon=False)
     fig.tight_layout()

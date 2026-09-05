@@ -94,6 +94,11 @@ def derive(summary: Path) -> list[tuple[str, str]]:
 
     bur = s[(s.experiment == "burstiness") & (s.surge_multiplier == 1.0)]
     out.append(("at risk with stationary demand", "%.4f" % bur[M].max()))
+    for mean in (38, 30):
+        fm = s[s.experiment == "burstiness-mean%d" % mean]
+        e = fm[fm.policy == "ecdsa-only"].sort_values("surge_multiplier")
+        out.append(("ECDSA at risk, mean load %d tx/s, multipliers 1/2/4/6" % mean,
+                    " / ".join("%.4f" % v for v in e[M])))
 
     return out
 

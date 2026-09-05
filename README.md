@@ -38,7 +38,7 @@ exits non-zero on any mismatch. Use `--numbers-only` to skip the rerun.
 | File | Contents |
 |---|---|
 | `qsentry_sim.py` | the model: credentials, mempool, block production, exposure accounting, and the closed-form exposure floor |
-| `suite.py` | ten experiments, five figures, paired statistical tests, and the manifest |
+| `suite.py` | twelve experiments, five figures, paired statistical tests, and the manifest |
 | `verify.py` | independent verification of both reproduction and the reported numbers |
 | `results/` | committed outputs, including a SHA-256 for every file |
 | `RESULTS.md` | every claim in the paper mapped to the exact number in the data |
@@ -47,7 +47,7 @@ exits non-zero on any mismatch. Use `--numbers-only` to skip the rerun.
 
 ## Experiments
 
-`results/results.csv` carries an `experiment` column. The suite runs 3,570 configurations
+`results/results.csv` carries an `experiment` column. The suite runs 4,050 configurations
 across 30 independent seeds.
 
 | Experiment | Runs | What it varies |
@@ -58,7 +58,9 @@ across 30 independent seeds.
 | `provisioning` | 450 | block capacity |
 | `chain` | 360 | block interval, isolating the theoretical floor |
 | `epsilon` | 300 | the exposure target, at feasible and infeasible loads |
-| `burstiness` | 240 | demand surge multiplier |
+| `burstiness` | 240 | demand surge multiplier at a fixed between-surge rate (mean load rises with it) |
+| `burstiness-mean38` | 240 | demand surge multiplier with the long-run mean load held at 38 tx/s |
+| `burstiness-mean30` | 240 | demand surge multiplier with the long-run mean load held at 30 tx/s |
 | `verify` | 180 | verification budget (sensitivity check) |
 | `v-sweep` | 150 | the cost–exposure weight `V` |
 | `ablation` | 120 | mechanism ablations |

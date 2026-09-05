@@ -88,6 +88,18 @@ provisioned out of the problem on any comparable scale.
 Section "Calibrating the Demand Model" in the paper compares the modelled burstiness
 against an observed mempool; see `calibration/`.
 
+**Burstiness at fixed mean load.** The `burstiness` sweep holds the between-surge rate
+fixed, so mean load rises with the multiplier. `burstiness-mean38` and `burstiness-mean30`
+scale the between-surge rate so the long-run mean stays at 38 and 30 tx/s (65% and 51%
+of ECDSA capacity); only the shape of demand changes.
+
+| Surge multiplier | ECDSA, mean 38 | QSentry, mean 38 | ECDSA, mean 30 | QSentry, mean 30 |
+|---|---|---|---|---|
+| 1 | 0.0000 | 0.0000 | 0.0000 | 0.0000 |
+| 2 | 0.0000 | 0.0000 | 0.0000 | 0.0000 |
+| 4 | 0.1673 | 0.1338 | 0.0128 | 0.0140 |
+| 6 | 0.2956 | 0.2513 | 0.1499 | 0.1315 |
+
 **Verification cost.** Varying the verification budget fourfold changes the at-risk
 fraction by at most 0.000000, confirming that block space rather than verification is the
 binding resource. This is checked, not assumed.
@@ -107,4 +119,4 @@ to 0.5160, so the result does not depend on tuning V.
 
 ---
 
-Generated from 3570 simulation runs across 10 experiments.
+Generated from 4050 simulation runs across 12 experiments.

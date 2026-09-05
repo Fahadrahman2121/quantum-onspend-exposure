@@ -113,6 +113,18 @@ w("%.4f for every policy: all measured exposure is produced by congestion episod
   % float(bur[bur.surge_multiplier == 1.0][M].max()))
 w("Section \"Calibrating the Demand Model\" in the paper compares the modelled burstiness")
 w("against an observed mempool; see `calibration/`.\n")
+w("**Burstiness at fixed mean load.** The `burstiness` sweep holds the between-surge rate")
+w("fixed, so mean load rises with the multiplier. `burstiness-mean38` and `burstiness-mean30`")
+w("scale the between-surge rate so the long-run mean stays at 38 and 30 tx/s (65% and 51%")
+w("of ECDSA capacity); only the shape of demand changes.\n")
+w("| Surge multiplier | ECDSA, mean 38 | QSentry, mean 38 | ECDSA, mean 30 | QSentry, mean 30 |")
+w("|---|---|---|---|---|")
+fm38 = S[S.experiment == "burstiness-mean38"]; fm30 = S[S.experiment == "burstiness-mean30"]
+for sm in sorted(fm38.surge_multiplier.unique()):
+    def g(df, p): return float(df[(df.policy == p) & (df.surge_multiplier == sm)].iloc[0][M])
+    w("| %g | %.4f | %.4f | %.4f | %.4f |" % (sm, g(fm38, "ecdsa-only"), g(fm38, "qsentry"),
+                                             g(fm30, "ecdsa-only"), g(fm30, "qsentry")))
+w("")
 ver = S[S.experiment == "verify"]
 spread = ver.groupby("policy")[M].agg(lambda v: v.max() - v.min()).max()
 w("**Verification cost.** Varying the verification budget fourfold changes the at-risk")
