@@ -94,6 +94,19 @@ def derive(summary: Path) -> list[tuple[str, str]]:
 
     bur = s[(s.experiment == "burstiness") & (s.surge_multiplier == 1.0)]
     out.append(("at risk with stationary demand", "%.4f" % bur[M].max()))
+    fl = s[s.experiment == "flood"]
+    qa = fl[(fl.policy == "qsentry") & (fl.vulnerable_cap == 1.0)].sort_values("attack_rate")
+    ea = fl[fl.policy == "ecdsa-only"].sort_values("attack_rate")
+    out.append(("flood: QSentry honest at risk, attack 0/5/10/20 tx/s",
+                " / ".join("%.4f" % v for v in qa[M])))
+    out.append(("flood: ECDSA-only honest at risk, attack 0/5/10/20 tx/s",
+                " / ".join("%.4f" % v for v in ea[M])))
+    out.append(("flood: QSentry PQ inclusion, attack 0/5/10/20 tx/s",
+                " / ".join("%.4f" % v for v in qa["inclusion_ratio_pq_mean"])))
+    a20 = qa[qa.attack_rate == 20.0].iloc[0]
+    cap_share = float(a20["attacker_included_tps_mean"]) * 355.0 * 12.0 / 250000.0
+    out.append(("flood: attacker share of block capacity at 20 tx/s (bound a*b0*D/B = 0.341)",
+                "%.4f" % cap_share))
     for mean in (38, 30):
         fm = s[s.experiment == "burstiness-mean%d" % mean]
         e = fm[fm.policy == "ecdsa-only"].sort_values("surge_multiplier")

@@ -136,6 +136,30 @@ w("**Control parameter.** Across V in [%g, %g] the at-risk fraction moves only f
   % (vs.control_v.min(), vs.control_v.max(), vs[M].min()))
 w("to %.4f, so the result does not depend on tuning V.\n" % vs[M].max())
 
+w("## The flood attack on the ordering lever\n")
+w("An attacker broadcasts ECDSA transactions to occupy the vulnerable class that slack")
+w("ordering serves first (`flood`, 26 tx/s between surges so the honest chain is inside")
+w("capacity). Honest metrics exclude the attacker's transactions; the builder cannot.\n")
+w("| Attack (tx/s) | ECDSA-only, honest un-migr. at risk | QSentry, honest un-migr. at risk | QSentry, PQ inclusion | attacker share of block capacity |")
+w("|---|---|---|---|---|")
+fl = S[S.experiment == "flood"]
+for atk in sorted(fl.attack_rate.unique()):
+    e = fl[(fl.policy == "ecdsa-only") & (fl.attack_rate == atk)].iloc[0]
+    q1 = fl[(fl.policy == "qsentry") & (fl.vulnerable_cap == 1.0) & (fl.attack_rate == atk)].iloc[0]
+    w("| %g | %.4f | %.4f | %.4f | %.4f |" % (atk, e[M], q1[M], q1["inclusion_ratio_pq_mean"],
+                                              float(q1["attacker_included_tps_mean"]) * 355.0 * 12.0 / 250000.0))
+w("")
+w("The attacker's share of block capacity never exceeds what its own offered bytes would")
+w("fill (a*b0*Delta/B = 0.341 at 20 tx/s): ordering gives the flood precedence, not")
+w("amplification. What it displaces is post-quantum traffic.\n")
+w("A per-block reservation for post-quantum traffic (`vulnerable_cap`) was tested and")
+w("rejected: with no attacker it raises honest exposure from %.4f (no cap) to %.4f (cap 0.7)"
+  % (float(fl[(fl.policy == "qsentry") & (fl.vulnerable_cap == 1.0) & (fl.attack_rate == 0)].iloc[0][M]),
+     float(fl[(fl.policy == "qsentry") & (fl.vulnerable_cap == 0.7) & (fl.attack_rate == 0)].iloc[0][M])))
+w("and %.4f (cap 0.5), because the virtual queue answers the extra exposure by migrating"
+  % float(fl[(fl.policy == "qsentry") & (fl.vulnerable_cap == 0.5) & (fl.attack_rate == 0)].iloc[0][M]))
+w("more traffic, which deepens the post-quantum backlog the reservation was meant to protect.\n")
+
 w("## What these results do not show\n")
 w("- QSentry never drives exposure to zero and cannot; at 38 tx/s it still leaves")
 w("  %.4f of un-migratable transactions at risk." % float(q[M]))

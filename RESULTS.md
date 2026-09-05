@@ -107,6 +107,28 @@ binding resource. This is checked, not assumed.
 **Control parameter.** Across V in [1, 60] the at-risk fraction moves only from 0.5094
 to 0.5160, so the result does not depend on tuning V.
 
+## The flood attack on the ordering lever
+
+An attacker broadcasts ECDSA transactions to occupy the vulnerable class that slack
+ordering serves first (`flood`, 26 tx/s between surges so the honest chain is inside
+capacity). Honest metrics exclude the attacker's transactions; the builder cannot.
+
+| Attack (tx/s) | ECDSA-only, honest un-migr. at risk | QSentry, honest un-migr. at risk | QSentry, PQ inclusion | attacker share of block capacity |
+|---|---|---|---|---|
+| 0 | 0.2011 | 0.1525 | 0.5797 | 0.0000 |
+| 5 | 0.2483 | 0.1830 | 0.5418 | 0.0846 |
+| 10 | 0.2769 | 0.1880 | 0.3934 | 0.1690 |
+| 20 | 0.5146 | 0.3229 | 0.1867 | 0.3337 |
+
+The attacker's share of block capacity never exceeds what its own offered bytes would
+fill (a*b0*Delta/B = 0.341 at 20 tx/s): ordering gives the flood precedence, not
+amplification. What it displaces is post-quantum traffic.
+
+A per-block reservation for post-quantum traffic (`vulnerable_cap`) was tested and
+rejected: with no attacker it raises honest exposure from 0.1525 (no cap) to 0.2899 (cap 0.7)
+and 0.4243 (cap 0.5), because the virtual queue answers the extra exposure by migrating
+more traffic, which deepens the post-quantum backlog the reservation was meant to protect.
+
 ## What these results do not show
 
 - QSentry never drives exposure to zero and cannot; at 38 tx/s it still leaves
@@ -119,4 +141,4 @@ to 0.5160, so the result does not depend on tuning V.
 
 ---
 
-Generated from 4050 simulation runs across 12 experiments.
+Generated from 4530 simulation runs across 13 experiments.

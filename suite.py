@@ -110,6 +110,20 @@ def run(out_dir: Path, seeds: int, quick: bool):
             _run(rows, "epsilon", sr, policy="qsentry",
                  arrival_rate=rate, exposure_target=eps)
 
+    # Flood attack on the ordering lever (item 3 of the review).  An attacker
+    # broadcasts ECDSA transactions to occupy the vulnerable class that slack
+    # ordering serves first.  Load 26 tx/s between surges keeps the honest
+    # chain inside capacity so that the attack, not congestion, is what is
+    # measured.  ecdsa-only is the status quo without ordering (fee-optimal never
+    # migrates, so it is the same policy here); vulnerable_cap only exists under
+    # ordering.
+    for atk in (0.0, 5.0, 10.0, 20.0):
+        for cap in (1.0, 0.7, 0.5):
+            _run(rows, "flood", sr, policy="qsentry", arrival_rate=26.0,
+                 attack_rate=atk, vulnerable_cap=cap)
+        _run(rows, "flood", sr, policy="ecdsa-only", arrival_rate=26.0,
+             attack_rate=atk)
+
     data = pd.DataFrame(rows)
     data.to_csv(out_dir / "results.csv", index=False, lineterminator="\n")
 
@@ -117,11 +131,12 @@ def run(out_dir: Path, seeds: int, quick: bool):
                "window_mean_s", "window_p95_s", "window_legacy_mean_s",
                "window_legacy_p95_s", "throughput_tps", "bytes_per_tx",
                "mean_pending_tx", "exposure_floor", "verify_per_tx",
-               "share_ecdsa", "share_falcon", "share_mldsa", "share_hybrid"]
+               "share_ecdsa", "share_falcon", "share_mldsa", "share_hybrid",
+               "inclusion_ratio_pq", "attacker_included_tps", "attacker_block_share"]
     group = ["experiment", "policy", "arrival_rate", "break_time_s",
              "block_interval_s", "legacy_fraction", "control_v",
              "verify_budget_per_block", "block_bytes", "surge_multiplier",
-             "exposure_target"]
+             "exposure_target", "attack_rate", "vulnerable_cap"]
     summary = data.groupby(group, dropna=False)[metrics].agg(["mean", ci95]).reset_index()
     summary.columns = ["_".join(str(x) for x in c if x).rstrip("_") for c in summary.columns]
     summary.to_csv(out_dir / "summary.csv", index=False, lineterminator="\n")

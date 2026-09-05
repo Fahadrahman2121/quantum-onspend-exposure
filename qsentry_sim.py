@@ -79,6 +79,16 @@ class Config:
     surge_leave: float = 0.22           # per-block probability of leaving one
     deadline_order: bool = True         # order by slack rather than by fee
     fixed_penalty: float = 400.0        # weight used by the no-virtual-queue ablation
+    # Adversarial flood on the ordering lever: an attacker broadcasts ECDSA
+    # transactions at this rate (tx/s) purely to occupy the vulnerable class,
+    # which slack ordering serves first.  They are excluded from every honest
+    # metric but the builder cannot tell them apart, so they do enter the
+    # virtual queue.  0 disables the attacker and leaves the RNG stream intact.
+    attack_rate: float = 0.0
+    # Reservation against that flood: while post-quantum transactions are
+    # waiting, the vulnerable class may take at most this fraction of a block.
+    # 1.0 is no reservation.  Work-conserving: leftover space is not wasted.
+    vulnerable_cap: float = 1.0
 
 
 def tx_bytes(name: str, payload: int) -> float:
@@ -144,6 +154,9 @@ def simulate(config: Config, keep_trace: bool = False):
     in_surge = False
     generated = generated_legacy = 0
     included = included_legacy = 0
+    generated_pq = included_pq = 0
+    attacker_generated = attacker_included = 0
+    attacker_bytes = 0.0
     at_risk = at_risk_legacy = 0
     window_sum = window_sum_legacy = 0.0
     total_bytes = total_verify = 0.0
@@ -201,11 +214,23 @@ def simulate(config: Config, keep_trace: bool = False):
                     if best is None or score < best[0]:
                         best = (score, cred)
                 cred = best[1]
-                mempool.append([now, count, CRED_NAMES.index(cred), size[cred]])
+                mempool.append([now, count, CRED_NAMES.index(cred), size[cred], 0])
                 pending_bytes += count * size[cred]
                 pending_tx += count
                 if measuring:
                     cred_counts[CRED_NAMES.index(cred)] += count
+                    if not CREDENTIALS[cred]["vulnerable"]:
+                        generated_pq += count
+
+        # ---------------- adversarial flood ----------------
+        if config.attack_rate > 0.0:
+            na = int(rng.poisson(config.attack_rate * slot_s))
+            if na > 0:
+                mempool.append([now, na, CRED_NAMES.index("ecdsa"), size["ecdsa"], 1])
+                pending_bytes += na * size["ecdsa"]
+                pending_tx += na
+                if measuring:
+                    attacker_generated += na
 
         # ---------------- block production ----------------
         if (slot + 1) % config.slots_per_block == 0:
@@ -225,8 +250,33 @@ def simulate(config: Config, keep_trace: bool = False):
                         vulnerable.append(entry)
                     else:
                         other.append(entry)
-                vulnerable.extend(other)
-                ordered = vulnerable
+                if config.vulnerable_cap < 1.0 and other:
+                    # Reservation: the vulnerable class goes first only up to
+                    # vulnerable_cap of the block; post-quantum transactions
+                    # then get the remainder; any vulnerable leftover follows
+                    # so that no block space is wasted.
+                    cap_bytes = config.vulnerable_cap * config.block_bytes
+                    head: deque[list] = deque()
+                    used = 0.0
+                    while vulnerable:
+                        e = vulnerable[0]
+                        room = int((cap_bytes - used) // e[3]) if e[3] > 0 else int(e[1])
+                        if room <= 0:
+                            break
+                        if room >= int(e[1]):
+                            head.append(vulnerable.popleft())
+                            used += e[1] * e[3]
+                        else:
+                            head.append([e[0], room, e[2], e[3], e[4]])
+                            e[1] -= room
+                            used += room * e[3]
+                            break
+                    head.extend(other)
+                    head.extend(vulnerable)
+                    ordered = head
+                else:
+                    vulnerable.extend(other)
+                    ordered = vulnerable
             else:
                 ordered = mempool
             budget = config.block_bytes
@@ -234,13 +284,13 @@ def simulate(config: Config, keep_trace: bool = False):
             block_risky = block_total = 0
             remaining: deque[list] = deque()
             while ordered:
-                arrival, count, cred_i, per = ordered.popleft()
+                arrival, count, cred_i, per, atk = ordered.popleft()
                 rel = CREDENTIALS[CRED_NAMES[cred_i]]["verify_rel"]
                 take = min(int(count),
                            int(budget // per) if per > 0 else int(count),
                            int(vbudget // rel) if rel > 0 else int(count))
                 if take <= 0:
-                    remaining.append([arrival, count, cred_i, per])
+                    remaining.append([arrival, count, cred_i, per, atk])
                     remaining.extend(ordered)
                     break
                 budget -= take * per
@@ -252,6 +302,18 @@ def simulate(config: Config, keep_trace: bool = False):
                 risky = CREDENTIALS[name]["vulnerable"] and window > config.break_time_s
                 block_total += take
                 block_risky += take if risky else 0
+                if atk:
+                    # The builder cannot tell a flood from honest traffic, so it
+                    # counts towards the virtual queue above; it is kept out of
+                    # every honest metric below.
+                    if measuring:
+                        attacker_included += take
+                        attacker_bytes += take * per
+                    if take < int(count):
+                        remaining.append([arrival, count - take, cred_i, per, atk])
+                        remaining.extend(ordered)
+                        break
+                    continue
                 if measuring:
                     included += take
                     window_sum += window * take
@@ -268,8 +330,10 @@ def simulate(config: Config, keep_trace: bool = False):
                         hist_legacy[idx] += take
                         if risky:
                             at_risk_legacy += take
+                    else:
+                        included_pq += take
                 if take < int(count):
-                    remaining.append([arrival, count - take, cred_i, per])
+                    remaining.append([arrival, count - take, cred_i, per, atk])
                     remaining.extend(ordered)
                     break
             else:
@@ -325,6 +389,10 @@ def simulate(config: Config, keep_trace: bool = False):
         "verify_per_tx": total_verify / max(included, 1),
         "generated": generated,
         "mean_offered_tps": generated / measured_s,
+        # Honest post-quantum traffic and the adversarial flood (item 3).
+        "inclusion_ratio_pq": included_pq / max(generated_pq, 1) if generated_pq else float("nan"),
+        "attacker_included_tps": attacker_included / measured_s,
+        "attacker_block_share": attacker_bytes / max(total_bytes + attacker_bytes, 1.0),
     }
     for i, name in enumerate(CRED_NAMES):
         result[f"share_{name}"] = float(cred_counts[i]) / total_cred
