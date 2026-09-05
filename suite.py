@@ -124,6 +124,14 @@ def run(out_dir: Path, seeds: int, quick: bool):
         _run(rows, "flood", sr, policy="ecdsa-only", arrival_rate=26.0,
              attack_rate=atk)
 
+    # Bounded deferral: pure slack order starves post-quantum traffic on an
+    # overloaded chain, so promote a post-quantum transaction into the front
+    # class once it has waited pq_max_wait seconds.  Swept at the nominal
+    # load (38 tx/s, where PQ inclusion is 0.20 without it) and at 26 tx/s.
+    for rate in (38.0, 26.0):
+        for wait in (float("inf"), 300.0, 120.0, 60.0, 24.0):
+            _run(rows, "aging", sr, policy="qsentry", arrival_rate=rate, pq_max_wait=wait)
+
     data = pd.DataFrame(rows)
     data.to_csv(out_dir / "results.csv", index=False, lineterminator="\n")
 
@@ -136,7 +144,7 @@ def run(out_dir: Path, seeds: int, quick: bool):
     group = ["experiment", "policy", "arrival_rate", "break_time_s",
              "block_interval_s", "legacy_fraction", "control_v",
              "verify_budget_per_block", "block_bytes", "surge_multiplier",
-             "exposure_target", "attack_rate", "vulnerable_cap"]
+             "exposure_target", "attack_rate", "vulnerable_cap", "pq_max_wait"]
     summary = data.groupby(group, dropna=False)[metrics].agg(["mean", ci95]).reset_index()
     summary.columns = ["_".join(str(x) for x in c if x).rstrip("_") for c in summary.columns]
     summary.to_csv(out_dir / "summary.csv", index=False, lineterminator="\n")

@@ -89,6 +89,11 @@ class Config:
     # waiting, the vulnerable class may take at most this fraction of a block.
     # 1.0 is no reservation.  Work-conserving: leftover space is not wasted.
     vulnerable_cap: float = 1.0
+    # Bounded deferral: a post-quantum transaction that has waited at least
+    # this long (seconds) is promoted into the front class and served in
+    # broadcast order with the vulnerable ones.  inf disables promotion and
+    # gives pure slack order, which is what the theorems are stated for.
+    pq_max_wait: float = float("inf")
 
 
 def tx_bytes(name: str, payload: int) -> float:
@@ -250,6 +255,24 @@ def simulate(config: Config, keep_trace: bool = False):
                         vulnerable.append(entry)
                     else:
                         other.append(entry)
+                if other and math.isfinite(config.pq_max_wait):
+                    # Each class is kept in broadcast order, so the overdue
+                    # post-quantum entries are a prefix of `other`; merge them
+                    # into the front class by broadcast time (both sorted).
+                    cutoff = (now + slot_s) - config.pq_max_wait
+                    promoted: deque[list] = deque()
+                    while other and other[0][0] <= cutoff:
+                        promoted.append(other.popleft())
+                    if promoted:
+                        merged: deque[list] = deque()
+                        while vulnerable and promoted:
+                            if vulnerable[0][0] <= promoted[0][0]:
+                                merged.append(vulnerable.popleft())
+                            else:
+                                merged.append(promoted.popleft())
+                        merged.extend(vulnerable)
+                        merged.extend(promoted)
+                        vulnerable = merged
                 if config.vulnerable_cap < 1.0 and other:
                     # Reservation: the vulnerable class goes first only up to
                     # vulnerable_cap of the block; post-quantum transactions

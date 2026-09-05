@@ -107,6 +107,11 @@ def derive(summary: Path) -> list[tuple[str, str]]:
     cap_share = float(a20["attacker_included_tps_mean"]) * 355.0 * 12.0 / 250000.0
     out.append(("flood: attacker share of block capacity at 20 tx/s (bound a*b0*D/B = 0.341)",
                 "%.4f" % cap_share))
+    ag = s[(s.experiment == "aging") & (s.arrival_rate == 38.0)].sort_values("pq_max_wait", ascending=False)
+    out.append(("aging at 38 tx/s, wait inf/300/120/60/24 s: honest at risk",
+                " / ".join("%.4f" % v for v in ag[M])))
+    out.append(("aging at 38 tx/s, wait inf/300/120/60/24 s: PQ inclusion",
+                " / ".join("%.4f" % v for v in ag["inclusion_ratio_pq_mean"])))
     for mean in (38, 30):
         fm = s[s.experiment == "burstiness-mean%d" % mean]
         e = fm[fm.policy == "ecdsa-only"].sort_values("surge_multiplier")

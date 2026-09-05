@@ -160,6 +160,21 @@ w("and %.4f (cap 0.5), because the virtual queue answers the extra exposure by m
   % float(fl[(fl.policy == "qsentry") & (fl.vulnerable_cap == 0.5) & (fl.attack_rate == 0)].iloc[0][M]))
 w("more traffic, which deepens the post-quantum backlog the reservation was meant to protect.\n")
 
+w("## Bounded deferral (tested and rejected)\n")
+w("`aging` promotes a post-quantum transaction into the front class once it has waited")
+w("`pq_max_wait` seconds. It buys post-quantum inclusion with honest exposure and with")
+w("overall inclusion, because each promoted post-quantum transaction displaces about five")
+w("vulnerable ones and the virtual queue then migrates more.\n")
+w("| Load (tx/s) | Wait (s) | honest un-migr. at risk | inclusion, all | PQ inclusion | bytes/tx |")
+w("|---|---|---|---|---|---|")
+ag = S[S.experiment == "aging"]
+for rate in sorted(ag.arrival_rate.unique(), reverse=True):
+    sub = ag[ag.arrival_rate == rate].sort_values("pq_max_wait", ascending=False)
+    for _, r in sub.iterrows():
+        w("| %g | %s | %.4f | %.3f | %.3f | %.0f |" % (rate, "inf" if not pd.notna(r.pq_max_wait) or r.pq_max_wait == float("inf") else "%g" % r.pq_max_wait,
+                                                  r[M], r["inclusion_ratio_mean"], r["inclusion_ratio_pq_mean"], r["bytes_per_tx_mean"]))
+w("")
+
 w("## What these results do not show\n")
 w("- QSentry never drives exposure to zero and cannot; at 38 tx/s it still leaves")
 w("  %.4f of un-migratable transactions at risk." % float(q[M]))

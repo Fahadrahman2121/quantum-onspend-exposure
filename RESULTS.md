@@ -129,6 +129,26 @@ rejected: with no attacker it raises honest exposure from 0.1525 (no cap) to 0.2
 and 0.4243 (cap 0.5), because the virtual queue answers the extra exposure by migrating
 more traffic, which deepens the post-quantum backlog the reservation was meant to protect.
 
+## Bounded deferral (tested and rejected)
+
+`aging` promotes a post-quantum transaction into the front class once it has waited
+`pq_max_wait` seconds. It buys post-quantum inclusion with honest exposure and with
+overall inclusion, because each promoted post-quantum transaction displaces about five
+vulnerable ones and the virtual queue then migrates more.
+
+| Load (tx/s) | Wait (s) | honest un-migr. at risk | inclusion, all | PQ inclusion | bytes/tx |
+|---|---|---|---|---|---|
+| 38 | inf | 0.5105 | 0.865 | 0.203 | 389 |
+| 38 | 300 | 0.7163 | 0.696 | 0.558 | 488 |
+| 38 | 120 | 0.7596 | 0.683 | 0.559 | 497 |
+| 38 | 60 | 0.7701 | 0.678 | 0.565 | 501 |
+| 38 | 24 | 0.7722 | 0.678 | 0.566 | 501 |
+| 26 | inf | 0.1525 | 0.953 | 0.580 | 449 |
+| 26 | 300 | 0.3510 | 0.841 | 0.630 | 526 |
+| 26 | 120 | 0.4365 | 0.807 | 0.626 | 550 |
+| 26 | 60 | 0.4682 | 0.800 | 0.617 | 556 |
+| 26 | 24 | 0.4709 | 0.799 | 0.617 | 557 |
+
 ## What these results do not show
 
 - QSentry never drives exposure to zero and cannot; at 38 tx/s it still leaves
@@ -141,4 +161,4 @@ more traffic, which deepens the post-quantum backlog the reservation was meant t
 
 ---
 
-Generated from 4530 simulation runs across 13 experiments.
+Generated from 4830 simulation runs across 14 experiments.
