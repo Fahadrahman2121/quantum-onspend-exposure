@@ -101,6 +101,18 @@ class Config:
     # exposure window is measured from the reveal.  Off by default.
     commit_reveal: bool = False
     commit_bytes: float = 100.0
+    # Trace replay: name of an entry in TRACES, a sorted array of (time_s,
+    # envelope_bytes) taken from a recorded mempool.  When set, arrivals come
+    # from the trace instead of the modulated Poisson process, each transaction
+    # is its own cohort with its own payload, and the credential sizes of
+    # Table I are added to the recorded envelope.  Empty string: synthetic.
+    trace_name: str = ""
+
+
+# Recorded arrival traces for replay, registered by name so that a Config stays
+# small and serialisable.  Each value is an (n, 2) float array of
+# (arrival time in seconds from the start of the run, envelope bytes).
+TRACES: dict[str, "np.ndarray"] = {}
 
 
 def tx_bytes(name: str, payload: int) -> float:
@@ -194,20 +206,33 @@ def simulate(config: Config, keep_trace: bool = False):
                 in_surge = rng.random() >= config.surge_leave
             else:
                 in_surge = rng.random() < config.surge_enter
-        rate = config.arrival_rate * (config.surge_multiplier if in_surge else 1.0)
-        n = int(rng.poisson(rate * slot_s))
+        if config.trace_name:
+            tr = TRACES[config.trace_name]
+            lo = int(np.searchsorted(tr[:, 0], now, side="left"))
+            hi = int(np.searchsorted(tr[:, 0], now + slot_s, side="left"))
+            n = hi - lo
+            if n > 0:
+                legacy_draw = rng.random(n) < config.legacy_fraction
+                items = [(bool(legacy_draw[j]), 1, int(tr[lo + j, 1])) for j in range(n)]
+                n_legacy = int(legacy_draw.sum())
+        else:
+            rate = config.arrival_rate * (config.surge_multiplier if in_surge else 1.0)
+            n = int(rng.poisson(rate * slot_s))
+            if n > 0:
+                n_legacy = int(rng.binomial(n, config.legacy_fraction))
+                items = [(True, n_legacy, config.payload_bytes),
+                         (False, n - n_legacy, config.payload_bytes)]
         if n > 0:
-            n_legacy = int(rng.binomial(n, config.legacy_fraction))
             if measuring:
                 generated += n
                 generated_legacy += n_legacy
             queue_seconds = pending_bytes / (config.block_bytes / config.block_interval_s)
-            for is_legacy, count in ((True, n_legacy), (False, n - n_legacy)):
+            for is_legacy, count, payload in items:
                 if count <= 0:
                     continue
                 best = None
                 for cred in _feasible(config.policy, is_legacy):
-                    b = size[cred]
+                    b = tx_bytes(cred, payload)
                     vulnerable = CREDENTIALS[cred]["vulnerable"]
                     # Predicted window: residual block time plus the drain time
                     # of everything already queued plus this cohort's own bytes.
@@ -228,12 +253,13 @@ def simulate(config: Config, keep_trace: bool = False):
                     if best is None or score < best[0]:
                         best = (score, cred)
                 cred = best[1]
+                per_tx = tx_bytes(cred, payload)
                 if config.commit_reveal:
                     mempool.append([now, count, CRED_NAMES.index(cred), config.commit_bytes, 2, now])
                     pending_bytes += count * config.commit_bytes
                 else:
-                    mempool.append([now, count, CRED_NAMES.index(cred), size[cred], 0, now])
-                    pending_bytes += count * size[cred]
+                    mempool.append([now, count, CRED_NAMES.index(cred), per_tx, 0, now])
+                    pending_bytes += count * per_tx
                 pending_tx += count
                 if measuring:
                     cred_counts[CRED_NAMES.index(cred)] += count
@@ -327,6 +353,12 @@ def simulate(config: Config, keep_trace: bool = False):
                            int(budget // per) if per > 0 else int(count),
                            int(vbudget // rel) if rel > 0 else int(count))
                 if take <= 0:
+                    if per > config.block_bytes:
+                        # Can never fit in any block: a builder drops it.  Only
+                        # replayed traces carry such transactions.
+                        pending_bytes -= count * per
+                        pending_tx -= count
+                        continue
                     remaining.append([arrival, count, cred_i, per, kind, orig])
                     remaining.extend(ordered)
                     break

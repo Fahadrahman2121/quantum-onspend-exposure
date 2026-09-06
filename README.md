@@ -44,6 +44,7 @@ exits non-zero on any mismatch. Use `--numbers-only` to skip the rerun.
 | `RESULTS.md` | every claim in the paper mapped to the exact number in the data |
 | `make_results_md.py` | regenerates `RESULTS.md` from the data, so the mapping cannot drift |
 | `calibration/` | the demand model checked against an observed Bitcoin mempool series |
+| `calibration/trace/` | one day of recorded Ethereum mainnet mempool arrivals: the measured exposure window, the burstiness of real arrivals against the model, and a replay of two hours through the simulator |
 
 ## Experiments
 
@@ -106,3 +107,21 @@ Citation details will be added once the paper is accepted.
 ## License
 
 Released under the MIT License. See `LICENSE`.
+
+## Real-chain data
+
+`calibration/trace/` works on one day of Ethereum mainnet mempool transactions from
+Flashbots' Mempool Dumpster (https://mempool-dumpster.flashbots.net). The daily file
+is not committed (126 MB); download it and check the digest before use:
+
+    https://mempool-dumpster.flashbots.net/ethereum/mainnet/2026-08/2026-08-19.csv.zip
+    sha256: 75a446963adf93e542e43aab45c1bce37cbfeae5cea1262f12fea9297818938d
+
+`analyze_trace.py` reports the first-seen-to-inclusion delay distribution (the exposure
+window of Definition 1 measured on the real chain), the at-risk fraction it implies at
+each break time, and the per-slot burstiness of arrivals against the two-state model
+(`trace_stats.json`). `replay.py` feeds one hour of recorded arrivals to the simulator,
+fits the byte capacity so that the ECDSA-only replay reproduces the observed mean wait,
+and then runs the policies on that chain and on counterfactuals provisioned to 80-100%
+mean utilisation (`replay_results.json`). Envelope size is taken as 110 bytes plus
+calldata; transactions larger than a block are dropped, as a builder would.
