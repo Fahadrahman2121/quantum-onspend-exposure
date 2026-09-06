@@ -107,6 +107,17 @@ def derive(summary: Path) -> list[tuple[str, str]]:
     cap_share = float(a20["attacker_included_tps_mean"]) * 355.0 * 12.0 / 250000.0
     out.append(("flood: attacker share of block capacity at 20 tx/s (bound a*b0*D/B = 0.341)",
                 "%.4f" % cap_share))
+    cz = s[(s.experiment == "conceal") & (s.commit_bytes == 100.0) & (s.break_time_s == 60.0)]
+    for pol in ("ecdsa-only", "qsentry"):
+        vals = []
+        for rate in (26.0, 38.0):
+            for cr in (False, True):
+                vals.append("%.4f" % float(cz[(cz.policy == pol) & (cz.arrival_rate == rate) & (cz.commit_reveal == cr)].iloc[0][M]))
+        out.append(("conceal, %s: at risk 26/26+CR/38/38+CR" % pol, " / ".join(vals)))
+    cb = s[(s.experiment == "conceal") & (s.policy == "qsentry") & (s.commit_reveal == True)]
+    out.append(("conceal bound probes (Tb=24 | bc=50 | bc=50,Tb=120 | bc=200)", " / ".join(
+        "%.4f" % float(cb[(cb.break_time_s == tb) & (cb.commit_bytes == bc) & (cb.arrival_rate == 38.0)].iloc[0][M])
+        for tb, bc in ((24.0, 100.0), (60.0, 50.0), (120.0, 50.0), (60.0, 200.0)))))
     ag = s[(s.experiment == "aging") & (s.arrival_rate == 38.0)].sort_values("pq_max_wait", ascending=False)
     out.append(("aging at 38 tx/s, wait inf/300/120/60/24 s: honest at risk",
                 " / ".join("%.4f" % v for v in ag[M])))

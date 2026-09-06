@@ -38,7 +38,7 @@ exits non-zero on any mismatch. Use `--numbers-only` to skip the rerun.
 | File | Contents |
 |---|---|
 | `qsentry_sim.py` | the model: credentials, mempool, block production, exposure accounting, and the closed-form exposure floor |
-| `suite.py` | fourteen experiments, five figures, paired statistical tests, and the manifest |
+| `suite.py` | fifteen experiments, five figures, paired statistical tests, and the manifest |
 | `verify.py` | independent verification of both reproduction and the reported numbers |
 | `results/` | committed outputs, including a SHA-256 for every file |
 | `RESULTS.md` | every claim in the paper mapped to the exact number in the data |
@@ -47,7 +47,7 @@ exits non-zero on any mismatch. Use `--numbers-only` to skip the rerun.
 
 ## Experiments
 
-`results/results.csv` carries an `experiment` column. The suite runs 4,830 configurations
+`results/results.csv` carries an `experiment` column. The suite runs 5,190 configurations
 across 30 independent seeds.
 
 | Experiment | Runs | What it varies |
@@ -61,6 +61,7 @@ across 30 independent seeds.
 | `burstiness` | 240 | demand surge multiplier at a fixed between-surge rate (mean load rises with it) |
 | `burstiness-mean38` | 240 | demand surge multiplier with the long-run mean load held at 38 tx/s |
 | `burstiness-mean30` | 240 | demand surge multiplier with the long-run mean load held at 30 tx/s |
+| `conceal` | 360 | concealment by commit-reveal, alone and composed with slack ordering, plus probes of the window bound |
 | `aging` | 300 | bounded deferral: a post-quantum transaction is promoted after waiting `pq_max_wait` seconds (tested and rejected) |
 | `flood` | 480 | an adversarial flood of ECDSA transactions aimed at the ordering lever, with and without a per-block reservation for post-quantum traffic |
 | `verify` | 180 | verification budget (sensitivity check) |

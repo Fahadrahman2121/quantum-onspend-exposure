@@ -160,6 +160,29 @@ w("and %.4f (cap 0.5), because the virtual queue answers the extra exposure by m
   % float(fl[(fl.policy == "qsentry") & (fl.vulnerable_cap == 0.5) & (fl.attack_rate == 0)].iloc[0][M]))
 w("more traffic, which deepens the post-quantum backlog the reservation was meant to protect.\n")
 
+w("## Concealment by commit-reveal, alone and with ordering\n")
+w("`conceal`: the transaction is disclosed only when its reveal is broadcast, after its")
+w("commit (100 bytes) is included. The window is measured from the reveal.\n")
+w("| Load (tx/s) | Policy | Commit-reveal | un-migr. at risk | inclusion | latency (s) |")
+w("|---|---|---|---|---|---|")
+cz = S[(S.experiment == "conceal") & (S.commit_bytes == 100.0) & (S.break_time_s == 60.0)]
+for rate in (26.0, 38.0):
+    for pol in ("ecdsa-only", "qsentry"):
+        for cr in (False, True):
+            r = cz[(cz.policy == pol) & (cz.arrival_rate == rate) & (cz.commit_reveal == cr)].iloc[0]
+            w("| %g | %s | %s | %.4f | %.3f | %.1f |" % (rate, pol, "yes" if cr else "no", r[M], r["inclusion_ratio_mean"], r["latency_mean_s_mean"]))
+w("")
+w("Concealment alone raises exposure (the commit costs block space and the reveal still")
+w("queues). Concealment with slack ordering drives it to zero: reveals go first, and the")
+w("commit's cost throttles disclosure, so W < Delta (1 + ceil(b0/bc)). Probes of the bound:\n")
+cb = S[(S.experiment == "conceal") & (S.policy == "qsentry") & (S.commit_reveal == True) & (S.arrival_rate == 38.0)]
+w("| break time (s) | commit bytes | bound (s) | un-migr. at risk |")
+w("|---|---|---|---|")
+import math
+for _, r in cb.sort_values(["commit_bytes", "break_time_s"]).iterrows():
+    w("| %g | %g | %d | %.4f |" % (r.break_time_s, r.commit_bytes, 12 * (1 + math.ceil(355.0 / r.commit_bytes)), r[M]))
+w("")
+
 w("## Bounded deferral (tested and rejected)\n")
 w("`aging` promotes a post-quantum transaction into the front class once it has waited")
 w("`pq_max_wait` seconds. It buys post-quantum inclusion with honest exposure and with")

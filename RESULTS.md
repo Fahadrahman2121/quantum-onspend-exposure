@@ -129,6 +129,34 @@ rejected: with no attacker it raises honest exposure from 0.1525 (no cap) to 0.2
 and 0.4243 (cap 0.5), because the virtual queue answers the extra exposure by migrating
 more traffic, which deepens the post-quantum backlog the reservation was meant to protect.
 
+## Concealment by commit-reveal, alone and with ordering
+
+`conceal`: the transaction is disclosed only when its reveal is broadcast, after its
+commit (100 bytes) is included. The window is measured from the reveal.
+
+| Load (tx/s) | Policy | Commit-reveal | un-migr. at risk | inclusion | latency (s) |
+|---|---|---|---|---|---|
+| 26 | ecdsa-only | no | 0.2011 | 0.993 | 36.4 |
+| 26 | ecdsa-only | yes | 0.3106 | 0.961 | 109.6 |
+| 26 | qsentry | no | 0.1525 | 0.953 | 63.1 |
+| 26 | qsentry | yes | 0.0000 | 0.964 | 101.5 |
+| 38 | ecdsa-only | no | 0.6346 | 0.912 | 148.8 |
+| 38 | ecdsa-only | yes | 0.7592 | 0.732 | 354.1 |
+| 38 | qsentry | no | 0.5105 | 0.865 | 125.9 |
+| 38 | qsentry | yes | 0.0000 | 0.759 | 320.7 |
+
+Concealment alone raises exposure (the commit costs block space and the reveal still
+queues). Concealment with slack ordering drives it to zero: reveals go first, and the
+commit's cost throttles disclosure, so W < Delta (1 + ceil(b0/bc)). Probes of the bound:
+
+| break time (s) | commit bytes | bound (s) | un-migr. at risk |
+|---|---|---|---|
+| 60 | 50 | 108 | 0.0620 |
+| 120 | 50 | 108 | 0.0000 |
+| 24 | 100 | 60 | 0.1309 |
+| 60 | 100 | 60 | 0.0000 |
+| 60 | 200 | 36 | 0.0000 |
+
 ## Bounded deferral (tested and rejected)
 
 `aging` promotes a post-quantum transaction into the front class once it has waited
@@ -161,4 +189,4 @@ vulnerable ones and the virtual queue then migrates more.
 
 ---
 
-Generated from 4830 simulation runs across 14 experiments.
+Generated from 5190 simulation runs across 15 experiments.

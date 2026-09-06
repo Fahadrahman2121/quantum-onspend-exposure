@@ -94,6 +94,13 @@ class Config:
     # broadcast order with the vulnerable ones.  inf disables promotion and
     # gives pure slack order, which is what the theorems are stated for.
     pq_max_wait: float = float("inf")
+    # Concealment by commit-reveal: a transaction is disclosed only when its
+    # reveal is broadcast, which happens once its commit has been included.
+    # The commit costs commit_bytes of block space and reveals nothing; the
+    # reveal carries the full transaction and is queued like any other.  The
+    # exposure window is measured from the reveal.  Off by default.
+    commit_reveal: bool = False
+    commit_bytes: float = 100.0
 
 
 def tx_bytes(name: str, payload: int) -> float:
@@ -162,6 +169,8 @@ def simulate(config: Config, keep_trace: bool = False):
     generated_pq = included_pq = 0
     attacker_generated = attacker_included = 0
     attacker_bytes = 0.0
+    latency_sum = 0.0            # broadcast to inclusion, commit phase included
+    commit_bytes_total = 0.0
     at_risk = at_risk_legacy = 0
     window_sum = window_sum_legacy = 0.0
     total_bytes = total_verify = 0.0
@@ -219,8 +228,12 @@ def simulate(config: Config, keep_trace: bool = False):
                     if best is None or score < best[0]:
                         best = (score, cred)
                 cred = best[1]
-                mempool.append([now, count, CRED_NAMES.index(cred), size[cred], 0])
-                pending_bytes += count * size[cred]
+                if config.commit_reveal:
+                    mempool.append([now, count, CRED_NAMES.index(cred), config.commit_bytes, 2, now])
+                    pending_bytes += count * config.commit_bytes
+                else:
+                    mempool.append([now, count, CRED_NAMES.index(cred), size[cred], 0, now])
+                    pending_bytes += count * size[cred]
                 pending_tx += count
                 if measuring:
                     cred_counts[CRED_NAMES.index(cred)] += count
@@ -231,7 +244,7 @@ def simulate(config: Config, keep_trace: bool = False):
         if config.attack_rate > 0.0:
             na = int(rng.poisson(config.attack_rate * slot_s))
             if na > 0:
-                mempool.append([now, na, CRED_NAMES.index("ecdsa"), size["ecdsa"], 1])
+                mempool.append([now, na, CRED_NAMES.index("ecdsa"), size["ecdsa"], 1, now])
                 pending_bytes += na * size["ecdsa"]
                 pending_tx += na
                 if measuring:
@@ -251,7 +264,7 @@ def simulate(config: Config, keep_trace: bool = False):
                 # artifact degrade where the model itself does not.
                 vulnerable, other = deque(), deque()
                 for entry in mempool:
-                    if CREDENTIALS[CRED_NAMES[entry[2]]]["vulnerable"]:
+                    if entry[4] != 2 and CREDENTIALS[CRED_NAMES[entry[2]]]["vulnerable"]:
                         vulnerable.append(entry)
                     else:
                         other.append(entry)
@@ -290,7 +303,7 @@ def simulate(config: Config, keep_trace: bool = False):
                             head.append(vulnerable.popleft())
                             used += e[1] * e[3]
                         else:
-                            head.append([e[0], room, e[2], e[3], e[4]])
+                            head.append([e[0], room, e[2], e[3], e[4], e[5]])
                             e[1] -= room
                             used += room * e[3]
                             break
@@ -306,26 +319,41 @@ def simulate(config: Config, keep_trace: bool = False):
             vbudget = config.verify_budget_per_block
             block_risky = block_total = 0
             remaining: deque[list] = deque()
+            reveals_next: list[list] = []
             while ordered:
-                arrival, count, cred_i, per, atk = ordered.popleft()
+                arrival, count, cred_i, per, kind, orig = ordered.popleft()
                 rel = CREDENTIALS[CRED_NAMES[cred_i]]["verify_rel"]
                 take = min(int(count),
                            int(budget // per) if per > 0 else int(count),
                            int(vbudget // rel) if rel > 0 else int(count))
                 if take <= 0:
-                    remaining.append([arrival, count, cred_i, per, atk])
+                    remaining.append([arrival, count, cred_i, per, kind, orig])
                     remaining.extend(ordered)
                     break
                 budget -= take * per
                 vbudget -= take * rel
                 pending_bytes -= take * per
+                if kind == 2:
+                    # A commit is included: nothing is disclosed, the
+                    # transaction stays pending, and its reveal is broadcast
+                    # at the next slot with the full credential size.
+                    name = CRED_NAMES[cred_i]
+                    reveals_next.append([now + slot_s, take, cred_i, size[name], 3, orig])
+                    pending_bytes += take * size[name]
+                    if measuring:
+                        commit_bytes_total += take * per
+                    if take < int(count):
+                        remaining.append([arrival, count - take, cred_i, per, kind, orig])
+                        remaining.extend(ordered)
+                        break
+                    continue
                 pending_tx -= take
                 window = (now + slot_s) - arrival
                 name = CRED_NAMES[cred_i]
                 risky = CREDENTIALS[name]["vulnerable"] and window > config.break_time_s
                 block_total += take
                 block_risky += take if risky else 0
-                if atk:
+                if kind == 1:
                     # The builder cannot tell a flood from honest traffic, so it
                     # counts towards the virtual queue above; it is kept out of
                     # every honest metric below.
@@ -333,13 +361,14 @@ def simulate(config: Config, keep_trace: bool = False):
                         attacker_included += take
                         attacker_bytes += take * per
                     if take < int(count):
-                        remaining.append([arrival, count - take, cred_i, per, atk])
+                        remaining.append([arrival, count - take, cred_i, per, kind, orig])
                         remaining.extend(ordered)
                         break
                     continue
                 if measuring:
                     included += take
                     window_sum += window * take
+                    latency_sum += ((now + slot_s) - orig) * take
                     idx = min(max(int(np.searchsorted(edges, window, side="right") - 1), 0),
                               len(hist) - 1)
                     hist[idx] += take
@@ -356,12 +385,13 @@ def simulate(config: Config, keep_trace: bool = False):
                     else:
                         included_pq += take
                 if take < int(count):
-                    remaining.append([arrival, count - take, cred_i, per, atk])
+                    remaining.append([arrival, count - take, cred_i, per, kind, orig])
                     remaining.extend(ordered)
                     break
             else:
                 pass
             mempool = remaining
+            mempool.extend(reveals_next)
             excess = (block_risky - config.exposure_target * block_total) if block_total else 0.0
             virtual = max(0.0, virtual + excess / max(config.arrival_rate, 1.0))
 
@@ -375,7 +405,7 @@ def simulate(config: Config, keep_trace: bool = False):
             # backlog alone.  Total drain is the wrong quantity for a policy that
             # defers post-quantum traffic deliberately.
             vuln_bytes = sum(e[1] * e[3] for e in mempool
-                             if CREDENTIALS[CRED_NAMES[e[2]]]["vulnerable"])
+                             if e[4] != 2 and CREDENTIALS[CRED_NAMES[e[2]]]["vulnerable"])
             vuln_drain = vuln_bytes / rate
             trace.append({"time_s": now,
                           "pending_tx": pending_tx,
@@ -414,6 +444,9 @@ def simulate(config: Config, keep_trace: bool = False):
         "mean_offered_tps": generated / measured_s,
         # Honest post-quantum traffic and the adversarial flood (item 3).
         "inclusion_ratio_pq": included_pq / max(generated_pq, 1) if generated_pq else float("nan"),
+        # Concealment (commit-reveal): end-to-end latency and the commit overhead.
+        "latency_mean_s": latency_sum / max(included, 1),
+        "commit_bytes_per_tx": commit_bytes_total / max(included, 1),
         "attacker_included_tps": attacker_included / measured_s,
         "attacker_block_share": attacker_bytes / max(total_bytes + attacker_bytes, 1.0),
     }

@@ -132,6 +132,20 @@ def run(out_dir: Path, seeds: int, quick: bool):
         for wait in (float("inf"), 300.0, 120.0, 60.0, 24.0):
             _run(rows, "aging", sr, policy="qsentry", arrival_rate=rate, pq_max_wait=wait)
 
+    # Concealment by commit-reveal: the transaction is disclosed only when its
+    # reveal is broadcast, after its commit is included.  Tests the claim that
+    # concealment moves the moment of disclosure but not the wait after it,
+    # and that it composes with ordering.
+    for rate in (26.0, 38.0):
+        for p in ("ecdsa-only", "qsentry"):
+            for cr in (False, True):
+                _run(rows, "conceal", sr, policy=p, arrival_rate=rate, commit_reveal=cr)
+    # Probes of the deterministic window bound W < Delta ceil(b0 / b_c):
+    # shrink the break time below it, or the commit so the bound grows past it.
+    for kw in (dict(break_time_s=24.0), dict(commit_bytes=50.0),
+               dict(commit_bytes=50.0, break_time_s=120.0), dict(commit_bytes=200.0)):
+        _run(rows, "conceal", sr, policy="qsentry", arrival_rate=38.0, commit_reveal=True, **kw)
+
     data = pd.DataFrame(rows)
     data.to_csv(out_dir / "results.csv", index=False, lineterminator="\n")
 
@@ -140,11 +154,13 @@ def run(out_dir: Path, seeds: int, quick: bool):
                "window_legacy_p95_s", "throughput_tps", "bytes_per_tx",
                "mean_pending_tx", "exposure_floor", "verify_per_tx",
                "share_ecdsa", "share_falcon", "share_mldsa", "share_hybrid",
-               "inclusion_ratio_pq", "attacker_included_tps", "attacker_block_share"]
+               "inclusion_ratio_pq", "attacker_included_tps", "attacker_block_share",
+               "latency_mean_s", "commit_bytes_per_tx"]
     group = ["experiment", "policy", "arrival_rate", "break_time_s",
              "block_interval_s", "legacy_fraction", "control_v",
              "verify_budget_per_block", "block_bytes", "surge_multiplier",
-             "exposure_target", "attack_rate", "vulnerable_cap", "pq_max_wait"]
+             "exposure_target", "attack_rate", "vulnerable_cap", "pq_max_wait",
+             "commit_reveal", "commit_bytes"]
     summary = data.groupby(group, dropna=False)[metrics].agg(["mean", ci95]).reset_index()
     summary.columns = ["_".join(str(x) for x in c if x).rstrip("_") for c in summary.columns]
     summary.to_csv(out_dir / "summary.csv", index=False, lineterminator="\n")
