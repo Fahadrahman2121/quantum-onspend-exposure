@@ -492,10 +492,12 @@ def main():
     parser.add_argument("--out", type=Path, default=Path("results"))
     parser.add_argument("--seeds", type=int, default=30)
     parser.add_argument("--quick", action="store_true")
+    parser.add_argument("--figures-only", action="store_true",
+                        help="regenerate figures, tables and manifest from results/results.csv")
     args = parser.parse_args()
     import suite
 
-    data = suite.run(args.out, args.seeds, args.quick)
+    data = suite.run(args.out, args.seeds, args.quick, figures_only=args.figures_only)
     print(f"wrote {len(data)} simulation runs to {args.out}")
 
 

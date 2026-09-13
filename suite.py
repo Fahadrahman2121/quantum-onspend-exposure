@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
 from scipy import stats
@@ -16,7 +17,7 @@ from qsentry_sim import POLICIES, Config, exposure_floor, simulate
 
 MAIN = ("ecdsa-only", "falcon-only", "mldsa-only", "qsentry")
 STYLE = {
-    "ecdsa-only": ("#9aa0a6", "o", "ECDSA only"),
+    "ecdsa-only": ("#4d4d4d", "o", "ECDSA only"),
     "falcon-only": ("#74c476", "^", "FN-DSA only"),
     "mldsa-only": ("#e6a23c", "s", "ML-DSA only"),
     "hybrid-only": ("#c46bb5", "v", "hybrid only"),
@@ -25,6 +26,18 @@ STYLE = {
     "qsentry-no-vq": ("#d62728", "X", "QSentry, fixed weight"),
 }
 PDF = {"bbox_inches": "tight", "metadata": {"CreationDate": None}}
+
+
+def legend(ax, policies, extra=(), **kw):
+    """Legend handles drawn as marker + line only.  The handles matplotlib
+    builds for errorbar() carry the error-bar stroke through the marker, so
+    they do not look like the points in the plot."""
+    handles = [Line2D([], [], color=STYLE[p][0], marker=STYLE[p][1], markersize=5,
+                      linewidth=1.4, label=STYLE[p][2]) for p in policies]
+    handles += list(extra)
+    kw.setdefault("fontsize", 6)
+    kw.setdefault("frameon", False)
+    ax.legend(handles=handles, **kw)
 
 
 def ci95(s: pd.Series) -> float:
@@ -41,113 +54,117 @@ def _run(rows, experiment, seeds, **kw):
         rows.append(row)
 
 
-def run(out_dir: Path, seeds: int, quick: bool):
+def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False):
     out_dir.mkdir(parents=True, exist_ok=True)
     sr = range(1, (5 if quick else seeds) + 1)
     rows: list[dict] = []
+    if figures_only:
+        # Regenerate figures, tables and the manifest from committed results.
+        data = pd.read_csv(out_dir / "results.csv")
+    else:
 
-    for rate in (20, 26, 32, 38, 44, 50):
-        for p in MAIN:
-            _run(rows, "congestion", sr, policy=p, arrival_rate=rate)
+        for rate in (20, 26, 32, 38, 44, 50):
+            for p in MAIN:
+                _run(rows, "congestion", sr, policy=p, arrival_rate=rate)
 
-    for tb in (15, 30, 60, 120, 240):
-        for p in MAIN:
-            _run(rows, "breaktime", sr, policy=p, break_time_s=tb)
+        for tb in (15, 30, 60, 120, 240):
+            for p in MAIN:
+                _run(rows, "breaktime", sr, policy=p, break_time_s=tb)
 
-    # Chain type.  Block capacity is held per unit time so that only the
-    # interval changes, isolating the residual-block-time floor.
-    for interval in (2.0, 6.0, 12.0, 60.0, 150.0, 600.0):
-        for p in ("ecdsa-only", "qsentry"):
-            _run(rows, "chain", sr, policy=p, block_interval_s=interval,
-                 block_bytes=250_000.0 * interval / 12.0)
-
-    for phi in (0.05, 0.15, 0.30, 0.50, 0.80):
-        for p in ("ecdsa-only", "falcon-only", "qsentry"):
-            _run(rows, "legacy", sr, policy=p, legacy_fraction=phi)
-
-    for p in ("fee-optimal", "qsentry", "qsentry-no-vq", "hybrid-only"):
-        _run(rows, "ablation", sr, policy=p, arrival_rate=38.0)
-
-    for v in (1.0, 4.0, 8.0, 20.0, 60.0):
-        _run(rows, "v-sweep", sr, policy="qsentry", arrival_rate=38.0, control_v=v)
-
-    for vb in (10_000.0, 20_000.0, 40_000.0):
-        for p in ("ecdsa-only", "qsentry"):
-            _run(rows, "verify", sr, policy=p, verify_budget_per_block=vb)
-
-    # Provisioning: how much block space does each policy need to hold the
-    # un-migratable share below target?
-    for bb in (150_000.0, 250_000.0, 400_000.0, 600_000.0, 900_000.0):
-        for p in ("ecdsa-only", "falcon-only", "qsentry"):
-            _run(rows, "provisioning", sr, policy=p, arrival_rate=38.0, block_bytes=bb)
-
-    # Burstiness: exposure is created by surges, so how much of the result
-    # depends on how bursty demand is?
-    for sm in (1.0, 2.0, 4.0, 6.0):
-        for p in ("ecdsa-only", "qsentry"):
-            _run(rows, "burstiness", sr, policy=p, arrival_rate=38.0, surge_multiplier=sm)
-
-    # Burstiness at FIXED MEAN load.  The sweep above holds the between-surge
-    # rate fixed, so the long-run mean offered load rises with the multiplier
-    # and the two effects are confounded.  Here the between-surge rate is
-    # scaled so that the long-run mean stays constant: 38 tx/s (65% of the
-    # 58.7 tx/s ECDSA capacity) and 30 tx/s (51%).  Only the shape of demand
-    # changes, which is the claim the paper's premise rests on.
-    c0 = Config()
-    pi_surge = c0.surge_enter / (c0.surge_enter + c0.surge_leave)
-    for mean in (38.0, 30.0):
-        for sm in (1.0, 2.0, 4.0, 6.0):
-            base = mean / (1.0 + pi_surge * (sm - 1.0))
+        # Chain type.  Block capacity is held per unit time so that only the
+        # interval changes, isolating the residual-block-time floor.
+        for interval in (2.0, 6.0, 12.0, 60.0, 150.0, 600.0):
             for p in ("ecdsa-only", "qsentry"):
-                _run(rows, "burstiness-mean%d" % int(mean), sr, policy=p,
-                     arrival_rate=base, surge_multiplier=sm)
+                _run(rows, "chain", sr, policy=p, block_interval_s=interval,
+                     block_bytes=250_000.0 * interval / 12.0)
 
-    # Does the virtual queue actually enforce the target?  Theorem 4 promises
-    # this only when a policy meeting it exists, so we sweep epsilon at a load
-    # where one does (26 tx/s) and at a load where none does (38 tx/s).
-    for eps in (0.01, 0.02, 0.05, 0.10, 0.20):
-        for rate in (20.0, 32.0):
-            _run(rows, "epsilon", sr, policy="qsentry",
-                 arrival_rate=rate, exposure_target=eps)
+        for phi in (0.05, 0.15, 0.30, 0.50, 0.80):
+            for p in ("ecdsa-only", "falcon-only", "qsentry"):
+                _run(rows, "legacy", sr, policy=p, legacy_fraction=phi)
 
-    # Flood attack on the ordering lever (item 3 of the review).  An attacker
-    # broadcasts ECDSA transactions to occupy the vulnerable class that slack
-    # ordering serves first.  Load 26 tx/s between surges keeps the honest
-    # chain inside capacity so that the attack, not congestion, is what is
-    # measured.  ecdsa-only is the status quo without ordering (fee-optimal never
-    # migrates, so it is the same policy here); vulnerable_cap only exists under
-    # ordering.
-    for atk in (0.0, 5.0, 10.0, 20.0):
-        for cap in (1.0, 0.7, 0.5):
-            _run(rows, "flood", sr, policy="qsentry", arrival_rate=26.0,
-                 attack_rate=atk, vulnerable_cap=cap)
-        _run(rows, "flood", sr, policy="ecdsa-only", arrival_rate=26.0,
-             attack_rate=atk)
+        for p in ("fee-optimal", "qsentry", "qsentry-no-vq", "hybrid-only"):
+            _run(rows, "ablation", sr, policy=p, arrival_rate=38.0)
 
-    # Bounded deferral: pure slack order starves post-quantum traffic on an
-    # overloaded chain, so promote a post-quantum transaction into the front
-    # class once it has waited pq_max_wait seconds.  Swept at the nominal
-    # load (38 tx/s, where PQ inclusion is 0.20 without it) and at 26 tx/s.
-    for rate in (38.0, 26.0):
-        for wait in (float("inf"), 300.0, 120.0, 60.0, 24.0):
-            _run(rows, "aging", sr, policy="qsentry", arrival_rate=rate, pq_max_wait=wait)
+        for v in (1.0, 4.0, 8.0, 20.0, 60.0):
+            _run(rows, "v-sweep", sr, policy="qsentry", arrival_rate=38.0, control_v=v)
 
-    # Concealment by commit-reveal: the transaction is disclosed only when its
-    # reveal is broadcast, after its commit is included.  Tests the claim that
-    # concealment moves the moment of disclosure but not the wait after it,
-    # and that it composes with ordering.
-    for rate in (26.0, 38.0):
-        for p in ("ecdsa-only", "qsentry"):
-            for cr in (False, True):
-                _run(rows, "conceal", sr, policy=p, arrival_rate=rate, commit_reveal=cr)
-    # Probes of the deterministic window bound W < Delta ceil(b0 / b_c):
-    # shrink the break time below it, or the commit so the bound grows past it.
-    for kw in (dict(break_time_s=24.0), dict(commit_bytes=50.0),
-               dict(commit_bytes=50.0, break_time_s=120.0), dict(commit_bytes=200.0)):
-        _run(rows, "conceal", sr, policy="qsentry", arrival_rate=38.0, commit_reveal=True, **kw)
+        for vb in (10_000.0, 20_000.0, 40_000.0):
+            for p in ("ecdsa-only", "qsentry"):
+                _run(rows, "verify", sr, policy=p, verify_budget_per_block=vb)
 
-    data = pd.DataFrame(rows)
-    data.to_csv(out_dir / "results.csv", index=False, lineterminator="\n")
+        # Provisioning: how much block space does each policy need to hold the
+        # un-migratable share below target?
+        for bb in (150_000.0, 250_000.0, 400_000.0, 600_000.0, 900_000.0):
+            for p in ("ecdsa-only", "falcon-only", "qsentry"):
+                _run(rows, "provisioning", sr, policy=p, arrival_rate=38.0, block_bytes=bb)
+
+        # Burstiness: exposure is created by surges, so how much of the result
+        # depends on how bursty demand is?
+        for sm in (1.0, 2.0, 4.0, 6.0):
+            for p in ("ecdsa-only", "qsentry"):
+                _run(rows, "burstiness", sr, policy=p, arrival_rate=38.0, surge_multiplier=sm)
+
+        # Burstiness at FIXED MEAN load.  The sweep above holds the between-surge
+        # rate fixed, so the long-run mean offered load rises with the multiplier
+        # and the two effects are confounded.  Here the between-surge rate is
+        # scaled so that the long-run mean stays constant: 38 tx/s (65% of the
+        # 58.7 tx/s ECDSA capacity) and 30 tx/s (51%).  Only the shape of demand
+        # changes, which is the claim the paper's premise rests on.
+        c0 = Config()
+        pi_surge = c0.surge_enter / (c0.surge_enter + c0.surge_leave)
+        for mean in (38.0, 30.0):
+            for sm in (1.0, 2.0, 4.0, 6.0):
+                base = mean / (1.0 + pi_surge * (sm - 1.0))
+                for p in ("ecdsa-only", "qsentry"):
+                    _run(rows, "burstiness-mean%d" % int(mean), sr, policy=p,
+                         arrival_rate=base, surge_multiplier=sm)
+
+        # Does the virtual queue actually enforce the target?  Theorem 4 promises
+        # this only when a policy meeting it exists, so we sweep epsilon at a load
+        # where one does (26 tx/s) and at a load where none does (38 tx/s).
+        for eps in (0.01, 0.02, 0.05, 0.10, 0.20):
+            for rate in (20.0, 32.0):
+                _run(rows, "epsilon", sr, policy="qsentry",
+                     arrival_rate=rate, exposure_target=eps)
+
+        # Flood attack on the ordering lever (item 3 of the review).  An attacker
+        # broadcasts ECDSA transactions to occupy the vulnerable class that slack
+        # ordering serves first.  Load 26 tx/s between surges keeps the honest
+        # chain inside capacity so that the attack, not congestion, is what is
+        # measured.  ecdsa-only is the status quo without ordering (fee-optimal never
+        # migrates, so it is the same policy here); vulnerable_cap only exists under
+        # ordering.
+        for atk in (0.0, 5.0, 10.0, 20.0):
+            for cap in (1.0, 0.7, 0.5):
+                _run(rows, "flood", sr, policy="qsentry", arrival_rate=26.0,
+                     attack_rate=atk, vulnerable_cap=cap)
+            _run(rows, "flood", sr, policy="ecdsa-only", arrival_rate=26.0,
+                 attack_rate=atk)
+
+        # Bounded deferral: pure slack order starves post-quantum traffic on an
+        # overloaded chain, so promote a post-quantum transaction into the front
+        # class once it has waited pq_max_wait seconds.  Swept at the nominal
+        # load (38 tx/s, where PQ inclusion is 0.20 without it) and at 26 tx/s.
+        for rate in (38.0, 26.0):
+            for wait in (float("inf"), 300.0, 120.0, 60.0, 24.0):
+                _run(rows, "aging", sr, policy="qsentry", arrival_rate=rate, pq_max_wait=wait)
+
+        # Concealment by commit-reveal: the transaction is disclosed only when its
+        # reveal is broadcast, after its commit is included.  Tests the claim that
+        # concealment moves the moment of disclosure but not the wait after it,
+        # and that it composes with ordering.
+        for rate in (26.0, 38.0):
+            for p in ("ecdsa-only", "qsentry"):
+                for cr in (False, True):
+                    _run(rows, "conceal", sr, policy=p, arrival_rate=rate, commit_reveal=cr)
+        # Probes of the deterministic window bound W < Delta ceil(b0 / b_c):
+        # shrink the break time below it, or the commit so the bound grows past it.
+        for kw in (dict(break_time_s=24.0), dict(commit_bytes=50.0),
+                   dict(commit_bytes=50.0, break_time_s=120.0), dict(commit_bytes=200.0)):
+            _run(rows, "conceal", sr, policy="qsentry", arrival_rate=38.0, commit_reveal=True, **kw)
+
+        data = pd.DataFrame(rows)
+        data.to_csv(out_dir / "results.csv", index=False, lineterminator="\n")
 
     metrics = ["inclusion_ratio", "at_risk_fraction", "at_risk_fraction_legacy",
                "window_mean_s", "window_p95_s", "window_legacy_mean_s",
@@ -163,9 +180,10 @@ def run(out_dir: Path, seeds: int, quick: bool):
              "commit_reveal", "commit_bytes"]
     summary = data.groupby(group, dropna=False)[metrics].agg(["mean", ci95]).reset_index()
     summary.columns = ["_".join(str(x) for x in c if x).rstrip("_") for c in summary.columns]
-    summary.to_csv(out_dir / "summary.csv", index=False, lineterminator="\n")
+    if not figures_only:   # a CSV round-trip would alter float formatting
+        summary.to_csv(out_dir / "summary.csv", index=False, lineterminator="\n")
 
-    def panel(ax, experiment, key, metric, policies, xlabel, ylabel, logx=False):
+    def panel(ax, experiment, key, metric, policies, xlabel, ylabel, logx=False, xdiv=1.0):
         sub = data[data.experiment == experiment]
         for policy in policies:
             chunk = sub[sub.policy == policy]
@@ -176,7 +194,9 @@ def run(out_dir: Path, seeds: int, quick: bool):
             y = g[metric].mean().reindex(x)
             e = g[metric].apply(ci95).reindex(x)
             c, mk, lab = STYLE[policy]
-            ax.errorbar(x, y, yerr=e, marker=mk, capsize=2, color=c, label=lab, linewidth=1.4)
+            ax.errorbar(x / xdiv, y, yerr=e, marker=mk, markersize=5, capsize=2,
+                        elinewidth=0.8, capthick=0.8, color=c, linewidth=1.4,
+                        label="_nolegend_")
         if logx:
             ax.set_xscale("log")
         ax.set(xlabel=xlabel, ylabel=ylabel)
@@ -190,7 +210,7 @@ def run(out_dir: Path, seeds: int, quick: bool):
           r"Between-surge load $\lambda_0$ (tx/s)", "At risk, un-migratable")
     panel(axes[2], "congestion", "arrival_rate", "inclusion_ratio", MAIN,
           r"Between-surge load $\lambda_0$ (tx/s)", "Inclusion ratio")
-    axes[0].legend(fontsize=6, frameon=False)
+    legend(axes[0], MAIN, loc="upper left")
     fig.tight_layout()
     fig.savefig(out_dir / "paradox.pdf", **PDF)
     fig.savefig(out_dir / "paradox.png", dpi=220, bbox_inches="tight")
@@ -205,9 +225,11 @@ def run(out_dir: Path, seeds: int, quick: bool):
           "At risk, un-migratable", logx=True)
     xs = np.logspace(np.log10(2.0), np.log10(600.0), 100)
     axes[1].plot(xs, [exposure_floor(60.0, x) for x in xs], color="#d62728",
-                 linestyle="--", linewidth=1.2, label=r"floor $1-T_b/\Delta$")
-    axes[0].legend(fontsize=6, frameon=False)
-    axes[1].legend(fontsize=6, frameon=False)
+                 linestyle="--", linewidth=1.2, label="_nolegend_")
+    legend(axes[0], MAIN, loc="lower left")
+    legend(axes[1], ("ecdsa-only", "qsentry"),
+           extra=[Line2D([], [], color="#d62728", linestyle="--", linewidth=1.2,
+                         label=r"floor $1-T_b/\Delta$")], loc="upper left")
     fig.tight_layout()
     fig.savefig(out_dir / "floor.pdf", **PDF)
     fig.savefig(out_dir / "floor.png", dpi=220, bbox_inches="tight")
@@ -227,23 +249,28 @@ def run(out_dir: Path, seeds: int, quick: bool):
     axes[1].set(xlabel="Block space per transaction (bytes)",
                 ylabel="At risk, un-migratable")
     axes[1].grid(alpha=0.25)
-    axes[0].legend(fontsize=6, frameon=False)
+    legend(axes[0], ("ecdsa-only", "falcon-only", "qsentry"))
     fig.tight_layout()
     fig.savefig(out_dir / "migration.pdf", **PDF)
     fig.savefig(out_dir / "migration.png", dpi=220, bbox_inches="tight")
     plt.close(fig)
 
-    # Figure 4: provisioning and burstiness
-    fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.6))
+    # Figure 4: provisioning and burstiness.  Typeset at column width, so the
+    # figure is drawn small with the same font sizes the wide figures use.
+    fig, axes = plt.subplots(1, 2, figsize=(3.6, 1.7))
     panel(axes[0], "provisioning", "block_bytes", "at_risk_fraction_legacy",
           ("ecdsa-only", "falcon-only", "qsentry"),
-          "Block capacity (bytes)", "At risk, un-migratable")
+          "Block capacity (kB)", "At risk, un-migratable", xdiv=1000.0)
     panel(axes[1], "burstiness-mean38", "surge_multiplier", "at_risk_fraction_legacy",
-          ("ecdsa-only", "qsentry"), "Surge multiplier (mean load 38 tx/s)",
+          ("ecdsa-only", "qsentry"), "Surge multiplier (mean 38 tx/s)",
           "At risk, un-migratable")
-    axes[0].legend(fontsize=6, frameon=False)
-    axes[1].legend(fontsize=6, frameon=False)
-    fig.tight_layout()
+    for ax in axes:
+        ax.tick_params(labelsize=6)
+        ax.xaxis.label.set_size(6.5)
+        ax.yaxis.label.set_size(6.5)
+    legend(axes[0], ("ecdsa-only", "falcon-only", "qsentry"), loc="center right", fontsize=5.5)
+    legend(axes[1], ("ecdsa-only", "qsentry"), loc="upper left", fontsize=5.5)
+    fig.tight_layout(pad=0.4)
     fig.savefig(out_dir / "provisioning.pdf", **PDF)
     fig.savefig(out_dir / "provisioning.png", dpi=220, bbox_inches="tight")
     plt.close(fig)
@@ -256,7 +283,7 @@ def run(out_dir: Path, seeds: int, quick: bool):
                        keep_trace=True)
     base.to_csv(out_dir / "trace_ecdsa.csv", index=False, lineterminator="\n")
     fig, ax = plt.subplots(figsize=(7.2, 2.4))
-    ax.plot(base.time_s, base.vulnerable_window_s, color="#9aa0a6",
+    ax.plot(base.time_s, base.vulnerable_window_s, color="#4d4d4d",
             linewidth=1.2, label="ECDSA only")
     ax.plot(trace.time_s, trace.vulnerable_window_s, color="#756bb1",
             linewidth=1.3, label="QSentry")
@@ -271,6 +298,7 @@ def run(out_dir: Path, seeds: int, quick: bool):
     ax2.set_ylabel("Virtual exposure queue", fontsize=8)
     h = ax.get_legend_handles_labels()[0] + ax2.get_legend_handles_labels()[0]
     l = ax.get_legend_handles_labels()[1] + ax2.get_legend_handles_labels()[1]
+    ax.set_ylim(top=ax.get_ylim()[1] * 2.5)   # headroom so the legend clears the peaks
     ax.legend(h, l, fontsize=6, frameon=False, ncol=4, loc="upper left")
     fig.tight_layout()
     fig.savefig(out_dir / "trace.pdf", **PDF)
@@ -295,8 +323,9 @@ def run(out_dir: Path, seeds: int, quick: bool):
                           "p_value": pv, "mean_qsentry": a.mean(),
                           "mean_baseline": b.mean(),
                           "cohens_d": (a.mean() - b.mean()) / pooled if pooled else float("nan")})
-    pd.DataFrame(tests).to_csv(out_dir / "statistical_tests.csv", index=False,
-                               lineterminator="\n")
+    if not figures_only:
+        pd.DataFrame(tests).to_csv(out_dir / "statistical_tests.csv", index=False,
+                                   lineterminator="\n")
 
     # CSVs are written with explicit LF and figures carry no timestamp, so
     # every digest below reproduces on any platform, not just this one.
