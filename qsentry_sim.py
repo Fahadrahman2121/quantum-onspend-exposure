@@ -56,14 +56,14 @@ POLICIES = (
 
 @dataclass(frozen=True)
 class Config:
-    arrival_rate: float = 40.0          # transactions/s offered
+    arrival_rate: float = 32.0          # between-surge tx/s; mean is 1.56x, stable below 37.7
     payload_bytes: int = 250
     legacy_fraction: float = 0.30       # share that cannot leave ECDSA
     block_interval_s: float = 12.0
     block_bytes: float = 250_000.0
     slots_per_block: int = 10
-    duration_blocks: int = 260
-    warmup_blocks: int = 60
+    duration_blocks: int = 1100
+    warmup_blocks: int = 100
     policy: str = "qsentry"
     seed: int = 1
     control_v: float = 8.0
@@ -107,6 +107,13 @@ class Config:
     # is its own cohort with its own payload, and the credential sizes of
     # Table I are added to the recorded envelope.  Empty string: synthetic.
     trace_name: str = ""
+    # Migration budget (Theorem 3).  A migratable sender is recommended a
+    # post-quantum credential only while the projected long-run byte load,
+    # estimated from every arrival seen so far, stays below budget_margin of
+    # block capacity.  False reproduces the unbudgeted controller, whose
+    # post-quantum backlog grows without bound at congested loads.
+    migration_budget: bool = True
+    budget_margin: float = 0.9
 
 
 # Recorded arrival traces for replay, registered by name so that a Config stays
@@ -175,6 +182,12 @@ def simulate(config: Config, keep_trace: bool = False):
     hist_legacy = np.zeros(len(edges) - 1, dtype=np.int64)
 
     virtual = 0.0
+    offered_bytes = 0.0     # every arrival at ECDSA size since t=0 (budget estimate)
+    extra_bytes = 0.0       # additional bytes of the credentials senders migrated to
+    warmup_s = warmup_slots * slot_s
+    included_unmig = at_risk_unmig = 0
+    window_sum_unmig = 0.0
+    hist_unmig = np.zeros(len(edges) - 1, dtype=np.int64)
     in_surge = False
     generated = generated_legacy = 0
     included = included_legacy = 0
@@ -193,12 +206,9 @@ def simulate(config: Config, keep_trace: bool = False):
     for slot in range(total_slots):
         now = slot * slot_s
         measuring = slot >= warmup_slots
-        if slot == warmup_slots:
-            # Start measurement from an empty mempool so that inclusion ratios
-            # and windows describe the measured interval rather than carry-over.
-            mempool.clear()
-            pending_bytes = 0.0
-            pending_tx = 0
+        # No reset at the end of warm-up: carried backlog is part of the state the
+        # system reaches, and clearing it hid overload.  Exposure and inclusion are
+        # measured over the cohort of transactions broadcast after warm-up.
 
         # ---------------- arrivals and credential assignment ----------------
         if slot % config.slots_per_block == 0:
@@ -230,10 +240,21 @@ def simulate(config: Config, keep_trace: bool = False):
             for is_legacy, count, payload in items:
                 if count <= 0:
                     continue
+                offered_bytes += count * (tx_bytes("ecdsa", payload)
+                                          + (config.commit_bytes if config.commit_reveal else 0.0))
                 best = None
                 for cred in _feasible(config.policy, is_legacy):
                     b = tx_bytes(cred, payload)
                     vulnerable = CREDENTIALS[cred]["vulnerable"]
+                    if (not vulnerable) and config.migration_budget \
+                            and config.policy in ("qsentry", "qsentry-no-vq"):
+                        # Theorem 3 budget: never recommend a credential that would
+                        # push the projected long-run byte load past the margin.
+                        b0 = tx_bytes("ecdsa", payload)
+                        if now < config.block_interval_s or \
+                                (offered_bytes + extra_bytes + count * (b - b0)) / now \
+                                > config.budget_margin * config.block_bytes / config.block_interval_s:
+                            continue
                     # Predicted window: residual block time plus the drain time
                     # of everything already queued plus this cohort's own bytes.
                     drain = queue_seconds + count * b / (config.block_bytes / config.block_interval_s)
@@ -243,8 +264,10 @@ def simulate(config: Config, keep_trace: bool = False):
                     if config.policy == "fee-optimal":
                         score = config.control_v * cost + queue_seconds * cost
                     elif config.policy == "qsentry":
+                        # Z weights the vulnerable-only constraint, so only a vulnerable
+                        # credential adds to A_v and earns the epsilon credit.
                         score = (config.control_v * cost + queue_seconds * cost
-                                 + virtual * count * (risk - config.exposure_target))
+                                 + virtual * count * (risk - config.exposure_target * (1.0 if vulnerable else 0.0)))
                     elif config.policy == "qsentry-no-vq":
                         score = (config.control_v * cost + queue_seconds * cost
                                  + config.fixed_penalty * count * risk)
@@ -254,11 +277,14 @@ def simulate(config: Config, keep_trace: bool = False):
                         best = (score, cred)
                 cred = best[1]
                 per_tx = tx_bytes(cred, payload)
+                if not CREDENTIALS[cred]["vulnerable"]:
+                    extra_bytes += count * (per_tx - tx_bytes("ecdsa", payload))
+                lg = 1 if is_legacy else 0
                 if config.commit_reveal:
-                    mempool.append([now, count, CRED_NAMES.index(cred), config.commit_bytes, 2, now])
+                    mempool.append([now, count, CRED_NAMES.index(cred), config.commit_bytes, 2, now, lg])
                     pending_bytes += count * config.commit_bytes
                 else:
-                    mempool.append([now, count, CRED_NAMES.index(cred), per_tx, 0, now])
+                    mempool.append([now, count, CRED_NAMES.index(cred), per_tx, 0, now, lg])
                     pending_bytes += count * per_tx
                 pending_tx += count
                 if measuring:
@@ -270,8 +296,9 @@ def simulate(config: Config, keep_trace: bool = False):
         if config.attack_rate > 0.0:
             na = int(rng.poisson(config.attack_rate * slot_s))
             if na > 0:
-                mempool.append([now, na, CRED_NAMES.index("ecdsa"), size["ecdsa"], 1, now])
+                mempool.append([now, na, CRED_NAMES.index("ecdsa"), size["ecdsa"], 1, now, 0])
                 pending_bytes += na * size["ecdsa"]
+                offered_bytes += na * size["ecdsa"]
                 pending_tx += na
                 if measuring:
                     attacker_generated += na
@@ -329,7 +356,7 @@ def simulate(config: Config, keep_trace: bool = False):
                             head.append(vulnerable.popleft())
                             used += e[1] * e[3]
                         else:
-                            head.append([e[0], room, e[2], e[3], e[4], e[5]])
+                            head.append([e[0], room, e[2], e[3], e[4], e[5], e[6]])
                             e[1] -= room
                             used += room * e[3]
                             break
@@ -347,7 +374,7 @@ def simulate(config: Config, keep_trace: bool = False):
             remaining: deque[list] = deque()
             reveals_next: list[list] = []
             while ordered:
-                arrival, count, cred_i, per, kind, orig = ordered.popleft()
+                arrival, count, cred_i, per, kind, orig, lg = ordered.popleft()
                 rel = CREDENTIALS[CRED_NAMES[cred_i]]["verify_rel"]
                 take = min(int(count),
                            int(budget // per) if per > 0 else int(count),
@@ -359,7 +386,7 @@ def simulate(config: Config, keep_trace: bool = False):
                         pending_bytes -= count * per
                         pending_tx -= count
                         continue
-                    remaining.append([arrival, count, cred_i, per, kind, orig])
+                    remaining.append([arrival, count, cred_i, per, kind, orig, lg])
                     remaining.extend(ordered)
                     break
                 budget -= take * per
@@ -370,12 +397,12 @@ def simulate(config: Config, keep_trace: bool = False):
                     # transaction stays pending, and its reveal is broadcast
                     # at the next slot with the full credential size.
                     name = CRED_NAMES[cred_i]
-                    reveals_next.append([now + slot_s, take, cred_i, size[name], 3, orig])
+                    reveals_next.append([now + slot_s, take, cred_i, size[name], 3, orig, lg])
                     pending_bytes += take * size[name]
-                    if measuring:
+                    if orig >= warmup_s:
                         commit_bytes_total += take * per
                     if take < int(count):
-                        remaining.append([arrival, count - take, cred_i, per, kind, orig])
+                        remaining.append([arrival, count - take, cred_i, per, kind, orig, lg])
                         remaining.extend(ordered)
                         break
                     continue
@@ -383,21 +410,22 @@ def simulate(config: Config, keep_trace: bool = False):
                 window = (now + slot_s) - arrival
                 name = CRED_NAMES[cred_i]
                 risky = CREDENTIALS[name]["vulnerable"] and window > config.break_time_s
-                block_total += take
+                # Virtual queue over vulnerable inclusions only (A_v, A_v,risk).
+                block_total += take if CREDENTIALS[name]["vulnerable"] else 0
                 block_risky += take if risky else 0
                 if kind == 1:
                     # The builder cannot tell a flood from honest traffic, so it
                     # counts towards the virtual queue above; it is kept out of
                     # every honest metric below.
-                    if measuring:
+                    if orig >= warmup_s:
                         attacker_included += take
                         attacker_bytes += take * per
                     if take < int(count):
-                        remaining.append([arrival, count - take, cred_i, per, kind, orig])
+                        remaining.append([arrival, count - take, cred_i, per, kind, orig, lg])
                         remaining.extend(ordered)
                         break
                     continue
-                if measuring:
+                if orig >= warmup_s:
                     included += take
                     window_sum += window * take
                     latency_sum += ((now + slot_s) - orig) * take
@@ -414,10 +442,16 @@ def simulate(config: Config, keep_trace: bool = False):
                         hist_legacy[idx] += take
                         if risky:
                             at_risk_legacy += take
+                        if lg:
+                            included_unmig += take
+                            window_sum_unmig += window * take
+                            hist_unmig[idx] += take
+                            if risky:
+                                at_risk_unmig += take
                     else:
                         included_pq += take
                 if take < int(count):
-                    remaining.append([arrival, count - take, cred_i, per, kind, orig])
+                    remaining.append([arrival, count - take, cred_i, per, kind, orig, lg])
                     remaining.extend(ordered)
                     break
             else:
@@ -447,6 +481,16 @@ def simulate(config: Config, keep_trace: bool = False):
                           "vulnerable_window_s": 0.5 * config.block_interval_s + vuln_drain,
                           "virtual": virtual})
 
+    end_t = total_slots * slot_s
+    pend_vuln_old = pend_unmig_old = pend_measured = 0
+    for e in mempool:
+        # Commits (kind 2) have disclosed nothing; the flood (kind 1) is not honest.
+        if e[4] in (0, 3) and e[5] >= warmup_s:
+            pend_measured += int(e[1])
+            if CREDENTIALS[CRED_NAMES[e[2]]]["vulnerable"] and end_t - e[0] > config.break_time_s:
+                pend_vuln_old += int(e[1])
+                if e[6]:
+                    pend_unmig_old += int(e[1])
     measured_s = (config.duration_blocks - config.warmup_blocks) * config.block_interval_s
     total_cred = max(cred_counts.sum(), 1)
 
@@ -462,17 +506,23 @@ def simulate(config: Config, keep_trace: bool = False):
         **asdict(config),
         "throughput_tps": included / measured_s,
         "inclusion_ratio": included / max(generated, 1),
-        "at_risk_fraction": at_risk / max(included, 1),
-        "at_risk_fraction_legacy": at_risk_legacy / max(included_legacy, 1),
+        # Cohort metrics: transactions broadcast after warm-up.  A vulnerable one
+        # still pending at the end and older than T_b counts as at risk.
+        "at_risk_fraction": (at_risk + pend_vuln_old) / max(included + pend_vuln_old, 1),
+        "at_risk_fraction_legacy": (at_risk_unmig + pend_unmig_old) / max(included_unmig + pend_unmig_old, 1),
+        "at_risk_fraction_vuln": (at_risk_legacy + pend_vuln_old) / max(included_legacy + pend_vuln_old, 1),
         "exposure_floor": exposure_floor(config.break_time_s, config.block_interval_s),
         "window_mean_s": window_sum / max(included, 1),
         "window_p95_s": pct(hist, 0.95),
-        "window_legacy_mean_s": window_sum_legacy / max(included_legacy, 1),
-        "window_legacy_p95_s": pct(hist_legacy, 0.95),
+        "window_legacy_mean_s": window_sum_unmig / max(included_unmig, 1),
+        "window_legacy_p95_s": pct(hist_unmig, 0.95),
+        "window_vuln_mean_s": window_sum_legacy / max(included_legacy, 1),
+        "window_vuln_p95_s": pct(hist_legacy, 0.95),
         "mean_pending_tx": backlog_area / measured_s,
         "bytes_per_tx": total_bytes / max(included, 1),
         "verify_per_tx": total_verify / max(included, 1),
         "generated": generated,
+        "pending_measured_end": pend_measured,
         "mean_offered_tps": generated / measured_s,
         # Honest post-quantum traffic and the adversarial flood (item 3).
         "inclusion_ratio_pq": included_pq / max(generated_pq, 1) if generated_pq else float("nan"),

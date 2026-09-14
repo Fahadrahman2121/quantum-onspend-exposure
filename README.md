@@ -48,26 +48,29 @@ exits non-zero on any mismatch. Use `--numbers-only` to skip the rerun.
 
 ## Experiments
 
-`results/results.csv` carries an `experiment` column. The suite runs 5,190 configurations
-across 30 independent seeds.
+`results/results.csv` carries an `experiment` column. The suite runs 5,070 configurations
+across 30 independent seeds on 4 worker processes. Every run lasts 1,100 blocks with a 100-block
+warm-up and no mempool reset; exposure is measured over the cohort broadcast after warm-up,
+counting a vulnerable transaction still pending at the end and older than T_b as at risk.
+The nominal load is 32 tx/s between surges (mean 49.8 tx/s, 85% of ECDSA capacity).
 
 | Experiment | Runs | What it varies |
 |---|---|---|
-| `congestion` | 720 | offered load, four policies |
+| `congestion` | 600 | between-surge load 20-36 tx/s, the whole stable range, four policies |
 | `breaktime` | 600 | adversary break time `T_b` |
 | `legacy` | 450 | the share of demand that cannot migrate |
 | `provisioning` | 450 | block capacity |
 | `chain` | 360 | block interval, isolating the theoretical floor |
-| `epsilon` | 300 | the exposure target, at feasible and infeasible loads |
-| `burstiness` | 240 | demand surge multiplier at a fixed between-surge rate (mean load rises with it) |
+| `epsilon` | 300 | the exposure target |
 | `burstiness-mean38` | 240 | demand surge multiplier with the long-run mean load held at 38 tx/s |
 | `burstiness-mean30` | 240 | demand surge multiplier with the long-run mean load held at 30 tx/s |
-| `conceal` | 360 | concealment by commit-reveal, alone and composed with slack ordering, plus probes of the window bound |
-| `aging` | 300 | bounded deferral: a post-quantum transaction is promoted after waiting `pq_max_wait` seconds (tested and rejected) |
-| `flood` | 480 | an adversarial flood of ECDSA transactions aimed at the ordering lever, with and without a per-block reservation for post-quantum traffic |
+| `ablation` | 180 | mechanism ablations, including QSentry without the migration budget and without slack ordering |
+| `v-sweep` | 150 | the cost-exposure weight `V` |
 | `verify` | 180 | verification budget (sensitivity check) |
-| `v-sweep` | 150 | the cost–exposure weight `V` |
-| `ablation` | 120 | mechanism ablations |
+| `flood` | 480 | an adversarial flood of vulnerable transactions, and a per-block reservation against it |
+| `aging` | 300 | bounded deferral for post-quantum transactions (tested and rejected) |
+| `conceal` | 360 | concealment by commit-reveal, alone and composed with slack ordering, plus probes of the window bound |
+| `horizon` | 180 | run length 200/1000/5000 blocks on a stable (32 tx/s) and an overloaded (38 tx/s) chain, 10 seeds |
 
 ## Reference environment
 

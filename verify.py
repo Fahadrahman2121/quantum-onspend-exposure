@@ -56,81 +56,136 @@ def check_manifest(candidate: Path) -> bool:
 
 
 def derive(summary: Path) -> list[tuple[str, str]]:
-    """Re-derive the numbers the paper quotes, straight from summary.csv."""
+    """Re-derive the numbers the paper quotes, straight from summary.csv.
+
+    Metrics are cohort-based: transactions broadcast after warm-up, with a
+    vulnerable transaction still pending at the end and older than T_b counted as
+    at risk.  _legacy is the un-migratable share, _vuln all vulnerable traffic."""
     s = pd.read_csv(summary)
     M = "at_risk_fraction_legacy_mean"
+    MV = "at_risk_fraction_vuln_mean"
     out: list[tuple[str, str]] = []
 
     con = s[s.experiment == "congestion"]
 
     def at(policy, rate, col=M):
-        row = con[(con.policy == policy) & (con.arrival_rate == rate)]
-        return float(row.iloc[0][col])
+        return float(con[(con.policy == policy) & (con.arrival_rate == rate)].iloc[0][col])
 
-    out.append(("ECDSA at risk, 20 tx/s", "%.4f" % at("ecdsa-only", 20)))
-    out.append(("FN-DSA at risk, 20 tx/s", "%.4f" % at("falcon-only", 20)))
-    out.append(("  ratio (paper: 27.6x)", "%.1fx" % (at("falcon-only", 20) / at("ecdsa-only", 20))))
-    out.append(("ECDSA at risk, 50 tx/s", "%.4f" % at("ecdsa-only", 50)))
-    out.append(("QSentry at risk, 50 tx/s", "%.4f" % at("qsentry", 50)))
+    for rate in sorted(con.arrival_rate.unique()):
+        out.append(("congestion %g tx/s, un-migr at risk: ECDSA / FN-DSA / ML-DSA / QSentry" % rate,
+                    " / ".join("%.4f" % at(p, rate) for p in ("ecdsa-only", "falcon-only", "mldsa-only", "qsentry"))))
+        out.append(("congestion %g tx/s, inclusion: ECDSA / FN-DSA / ML-DSA / QSentry" % rate,
+                    " / ".join("%.3f" % at(p, rate, "inclusion_ratio_mean")
+                               for p in ("ecdsa-only", "falcon-only", "mldsa-only", "qsentry"))))
 
-    abl = s[s.experiment == "ablation"].set_index("policy")
-    q, f = abl.loc["qsentry"], abl.loc["fee-optimal"]
-    h, nv = abl.loc["hybrid-only"], abl.loc["qsentry-no-vq"]
-    out.append(("QSentry vs exposure-blind", "%.1f%% reduction" % (100 * (f[M] - q[M]) / f[M])))
-    out.append(("QSentry vs fixed weight", "%.1f%% reduction" % (100 * (nv[M] - q[M]) / nv[M])))
-    out.append(("QSentry vs hybrid migration", "%.1f%% reduction" % (100 * (h[M] - q[M]) / h[M])))
-    out.append(("  inclusion advantage", "%.2fx" % (q.inclusion_ratio_mean / h.inclusion_ratio_mean)))
-    out.append(("  block space cost", "+%.1f%%" % (100 * (q.bytes_per_tx_mean / f.bytes_per_tx_mean - 1))))
+    abl = s[s.experiment == "ablation"]
+
+    def ab(policy, budget=True, order=True):
+        r = abl[(abl.policy == policy) & (abl.migration_budget == budget) & (abl.deadline_order == order)]
+        return r.iloc[0]
+
+    for lab, r in (("block-space optimal", ab("fee-optimal")), ("QSentry", ab("qsentry")),
+                   ("QSentry no budget", ab("qsentry", budget=False)),
+                   ("QSentry no ordering", ab("qsentry", order=False)),
+                   ("QSentry fixed weight", ab("qsentry-no-vq")), ("hybrid only", ab("hybrid-only"))):
+        out.append(("ablation %s: un-migr / vuln / incl / PQ incl / FN share / bytes/tx / pending end" % lab,
+                    "%.4f / %.4f / %.3f / %.3f / %.4f / %.0f / %.0f" % (
+                        r[M], r[MV], r.inclusion_ratio_mean, r.inclusion_ratio_pq_mean,
+                        r.share_falcon_mean, r.bytes_per_tx_mean, r.pending_measured_end_mean)))
 
     ch = s[s.experiment == "chain"]
     viol = [(r.policy, r.block_interval_s) for _, r in ch.iterrows()
-            if r[M] < r["exposure_floor_mean"] - 1e-9]
-    out.append(("Theorem 1 floor respected", "yes, all %d points" % len(ch) if not viol
-                else "NO: %s" % viol))
+            if r[MV] < r["exposure_floor_mean"] - 1e-9]
+    out.append(("Theorem 1 floor respected (all vulnerable)",
+                "yes, all %d points" % len(ch) if not viol else "NO: %s" % viol))
+    for iv in sorted(ch.block_interval_s.unique()):
+        e = ch[(ch.policy == "ecdsa-only") & (ch.block_interval_s == iv)].iloc[0]
+        q = ch[(ch.policy == "qsentry") & (ch.block_interval_s == iv)].iloc[0]
+        out.append(("chain %g s: floor / ECDSA vuln / QSentry vuln" % iv,
+                    "%.3f / %.4f / %.4f" % (e["exposure_floor_mean"], e[MV], q[MV])))
+
+    bt = s[s.experiment == "breaktime"]
+    for tb in sorted(bt.break_time_s.unique()):
+        out.append(("break time %g s: un-migr ECDSA / QSentry" % tb, "%.4f / %.4f" % (
+            float(bt[(bt.policy == "ecdsa-only") & (bt.break_time_s == tb)].iloc[0][M]),
+            float(bt[(bt.policy == "qsentry") & (bt.break_time_s == tb)].iloc[0][M]))))
+
+    lg = s[s.experiment == "legacy"]
+    for pol in ("ecdsa-only", "falcon-only", "qsentry"):
+        sub = lg[lg.policy == pol].sort_values("legacy_fraction")
+        out.append(("phi 0.05/0.15/0.30/0.50/0.80, un-migr at risk, %s" % pol,
+                    " / ".join("%.4f" % v for v in sub[M])))
+
+    pr = s[s.experiment == "provisioning"]
+    for pol in ("ecdsa-only", "falcon-only", "qsentry"):
+        sub = pr[pr.policy == pol].sort_values("block_bytes")
+        out.append(("provisioning 150/250/400/600/900 kB, un-migr at risk, %s" % pol,
+                    " / ".join("%.4f" % v for v in sub[M])))
 
     ver = s[s.experiment == "verify"]
-    spread = ver.groupby("policy")[M].agg(lambda v: v.max() - v.min())
-    out.append(("verification-cost sensitivity", "max spread %.6f" % spread.max()))
+    out.append(("verification-cost sensitivity",
+                "max spread %.6f" % ver.groupby("policy")[M].agg(lambda v: v.max() - v.min()).max()))
+    vs = s[s.experiment == "v-sweep"]
+    out.append(("V in [1, 60]: un-migr at risk min / max", "%.4f / %.4f" % (vs[M].min(), vs[M].max())))
+    ep = s[s.experiment == "epsilon"]
+    for rate in (20.0, 32.0):
+        sub = ep[ep.arrival_rate == rate].sort_values("exposure_target")
+        out.append(("epsilon 0.01..0.20 at %g tx/s: un-migr at risk" % rate,
+                    " / ".join("%.4f" % v for v in sub[M])))
 
-    bur = s[(s.experiment == "burstiness") & (s.surge_multiplier == 1.0)]
-    out.append(("at risk with stationary demand", "%.4f" % bur[M].max()))
+    for mean in (38, 30):
+        fm = s[s.experiment == "burstiness-mean%d" % mean]
+        for pol in ("ecdsa-only", "qsentry"):
+            e = fm[fm.policy == pol].sort_values("surge_multiplier")
+            out.append(("burstiness mean %d tx/s, %s, multipliers 1/2/4/6" % (mean, pol),
+                        " / ".join("%.4f" % v for v in e[M])))
+
     fl = s[s.experiment == "flood"]
     qa = fl[(fl.policy == "qsentry") & (fl.vulnerable_cap == 1.0)].sort_values("attack_rate")
     ea = fl[fl.policy == "ecdsa-only"].sort_values("attack_rate")
-    out.append(("flood: QSentry honest at risk, attack 0/5/10/20 tx/s",
-                " / ".join("%.4f" % v for v in qa[M])))
-    out.append(("flood: ECDSA-only honest at risk, attack 0/5/10/20 tx/s",
-                " / ".join("%.4f" % v for v in ea[M])))
-    out.append(("flood: QSentry PQ inclusion, attack 0/5/10/20 tx/s",
+    out.append(("flood QSentry un-migr at risk, attack 0/5/10/20", " / ".join("%.4f" % v for v in qa[M])))
+    out.append(("flood ECDSA-only un-migr at risk, attack 0/5/10/20", " / ".join("%.4f" % v for v in ea[M])))
+    out.append(("flood QSentry PQ inclusion, attack 0/5/10/20",
                 " / ".join("%.4f" % v for v in qa["inclusion_ratio_pq_mean"])))
     a20 = qa[qa.attack_rate == 20.0].iloc[0]
-    cap_share = float(a20["attacker_included_tps_mean"]) * 355.0 * 12.0 / 250000.0
-    out.append(("flood: attacker share of block capacity at 20 tx/s (bound a*b0*D/B = 0.341)",
-                "%.4f" % cap_share))
+    out.append(("flood attacker share of capacity at 20 tx/s (bound 0.341)",
+                "%.4f" % (float(a20["attacker_included_tps_mean"]) * 355.0 * 12.0 / 250000.0)))
+    for cap in (0.7, 0.5):
+        r = fl[(fl.policy == "qsentry") & (fl.vulnerable_cap == cap) & (fl.attack_rate == 0.0)].iloc[0]
+        out.append(("flood reservation %.1f, no attacker: un-migr at risk / PQ incl" % cap,
+                    "%.4f / %.4f" % (r[M], r["inclusion_ratio_pq_mean"])))
+
     cz = s[(s.experiment == "conceal") & (s.commit_bytes == 100.0) & (s.break_time_s == 60.0)]
     for pol in ("ecdsa-only", "qsentry"):
-        vals = []
-        for rate in (26.0, 38.0):
+        for rate in (26.0, 32.0):
             for cr in (False, True):
-                vals.append("%.4f" % float(cz[(cz.policy == pol) & (cz.arrival_rate == rate) & (cz.commit_reveal == cr)].iloc[0][M]))
-        out.append(("conceal, %s: at risk 26/26+CR/38/38+CR" % pol, " / ".join(vals)))
-    cb = s[(s.experiment == "conceal") & (s.policy == "qsentry") & (s.commit_reveal == True)]
-    out.append(("conceal bound probes (Tb=24 | bc=50 | bc=50,Tb=120 | bc=200)", " / ".join(
-        "%.4f" % float(cb[(cb.break_time_s == tb) & (cb.commit_bytes == bc) & (cb.arrival_rate == 38.0)].iloc[0][M])
+                r = cz[(cz.policy == pol) & (cz.arrival_rate == rate) & (cz.commit_reveal == cr)].iloc[0]
+                out.append(("conceal %s %g tx/s commit-reveal=%s: un-migr / incl / latency s / pending end" % (pol, rate, cr),
+                            "%.4f / %.3f / %.0f / %.0f" % (r[M], r["inclusion_ratio_mean"], r["latency_mean_s_mean"],
+                                                           r["pending_measured_end_mean"])))
+    cb = s[(s.experiment == "conceal") & (s.policy == "qsentry") & (s.commit_reveal == True) & (s.arrival_rate == 26.0)]
+    out.append(("conceal probes at 26 (Tb=24 | bc=50 | bc=50,Tb=120 | bc=200)", " / ".join(
+        "%.4f" % float(cb[(cb.break_time_s == tb) & (cb.commit_bytes == bc)].iloc[0][M])
         for tb, bc in ((24.0, 100.0), (60.0, 50.0), (120.0, 50.0), (60.0, 200.0)))))
-    ag = s[(s.experiment == "aging") & (s.arrival_rate == 38.0)].sort_values("pq_max_wait", ascending=False)
-    out.append(("aging at 38 tx/s, wait inf/300/120/60/24 s: honest at risk",
-                " / ".join("%.4f" % v for v in ag[M])))
-    out.append(("aging at 38 tx/s, wait inf/300/120/60/24 s: PQ inclusion",
-                " / ".join("%.4f" % v for v in ag["inclusion_ratio_pq_mean"])))
-    for mean in (38, 30):
-        fm = s[s.experiment == "burstiness-mean%d" % mean]
-        e = fm[fm.policy == "ecdsa-only"].sort_values("surge_multiplier")
-        out.append(("ECDSA at risk, mean load %d tx/s, multipliers 1/2/4/6" % mean,
-                    " / ".join("%.4f" % v for v in e[M])))
 
+    ag = s[s.experiment == "aging"]
+    for rate in (32.0, 26.0):
+        sub = ag[ag.arrival_rate == rate].sort_values("pq_max_wait", ascending=False)
+        out.append(("aging %g tx/s wait inf/300/120/60/24: un-migr at risk" % rate,
+                    " / ".join("%.4f" % v for v in sub[M])))
+        out.append(("aging %g tx/s: PQ inclusion" % rate,
+                    " / ".join("%.4f" % v for v in sub["inclusion_ratio_pq_mean"])))
+
+    hz = s[s.experiment == "horizon"]
+    for rate in (32.0, 38.0):
+        for lab, pol, bud in (("ECDSA", "ecdsa-only", True), ("QSentry", "qsentry", True),
+                              ("QSentry no budget", "qsentry", False)):
+            sub = hz[(hz.arrival_rate == rate) & (hz.policy == pol) & (hz.migration_budget == bud)].sort_values("duration_blocks")
+            out.append(("horizon %g tx/s %s, vuln at risk @200/1000/5000 blocks" % (rate, lab),
+                        " / ".join("%.4f" % v for v in sub[MV])))
+            out.append(("horizon %g tx/s %s, pending at end @200/1000/5000" % (rate, lab),
+                        " / ".join("%.0f" % v for v in sub["pending_measured_end_mean"])))
     return out
-
 
 def main() -> int:
     ap = argparse.ArgumentParser()

@@ -54,7 +54,7 @@ def window(hour: int):
 def run(name, policy, B, seeds=SEEDS, **kw):
     rows = [m.simulate(m.Config(policy=policy, seed=s, block_bytes=B, trace_name=name, **CFG, **kw))[0]
             for s in range(1, seeds + 1)]
-    keys = ["at_risk_fraction", "at_risk_fraction_legacy", "inclusion_ratio", "window_mean_s",
+    keys = ["at_risk_fraction", "at_risk_fraction_legacy", "at_risk_fraction_vuln", "inclusion_ratio", "window_mean_s",
             "window_p95_s", "window_legacy_mean_s", "mean_offered_tps", "bytes_per_tx", "share_falcon"]
     return {k: float(np.mean([r[k] for r in rows])) for k in keys}
 
@@ -82,13 +82,16 @@ for label, hour in (("busiest hour (10:00 UTC)", 10), ("quiet hour (03:00 UTC)",
          "observed_mean_s": float(obs.mean()), "observed_median_s": float(obs.median()),
          "observed_p95_s": float(obs.quantile(0.95)),
          "observed_at_risk_60": float((obs > 60).mean()), "observed_at_risk_15": float((obs > 15).mean()),
-         "bytes_per_s": float(tr[tr[:, 0] >= WARM * 12.0][:, 1].sum() / 3600.0)}
+         "bytes_per_s": float(tr[tr[:, 0] >= WARM * 12.0][:, 1].sum() / 3600.0),
+         # Utilisation must count the 105-byte ECDSA credential the simulator adds
+         # to every envelope; envelope bytes alone understate it by a quarter.
+         "bytes_per_s_ecdsa": float((tr[tr[:, 0] >= WARM * 12.0][:, 1] + 105.0).sum() / 3600.0)}
     B = fit_capacity(name, o["observed_mean_s"])
     o["fitted_block_bytes"] = float(B)
-    o["fitted_utilisation"] = float(o["bytes_per_s"] * 12.0 / B)
+    o["fitted_utilisation"] = float(o["bytes_per_s_ecdsa"] * 12.0 / B)
     # Counterfactuals: the same hour's demand on a chain provisioned to a
     # target mean utilisation (offered bytes per block over block bytes).
-    caps = [("fitted", B)] + [("util-%.2f" % u, o["bytes_per_s"] * 12.0 / u) for u in (0.80, 0.90, 0.95, 1.00)]
+    caps = [("fitted", B)] + [("util-%.2f" % u, o["bytes_per_s_ecdsa"] * 12.0 / u) for u in (0.80, 0.90, 0.95, 1.00)]
     for tag, cap in caps:
         for policy in ("ecdsa-only", "qsentry"):
             o["%s_%s" % (tag, policy)] = run(name, policy, cap)
