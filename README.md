@@ -1,7 +1,7 @@
-# Quantum on-spend exposure in blockchain mempools
+# Quantum exposure of blockchain transactions in transit
 
-Reproducibility artifact for **"Securing Blockchain Transactions against Quantum On-Spend
-Attacks: Exposure Bounds and Adaptive Mitigations."**
+Reproducibility artifact for **"Quantum Exposure of Blockchain Transactions in Transit:
+Fundamental Bounds and Adaptive Mempool Control."**
 
 A transaction reveals its public key the moment it is broadcast and stops being attackable
 once it is recorded in a block. Recent resource estimates place a fast-clock
