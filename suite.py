@@ -24,6 +24,7 @@ STYLE = {
     "fee-optimal": ("#3182bd", "P", "block-space optimal"),
     "qsentry": ("#756bb1", "D", "QSentry"),
     "qsentry-no-vq": ("#d62728", "X", "QSentry, fixed weight"),
+    "ecdsa-ordered": ("#9e9ac8", "d", "ECDSA, slack order"),
 }
 PDF = {"bbox_inches": "tight", "metadata": {"CreationDate": None}}
 
@@ -61,7 +62,14 @@ def _job(args):
     return row
 
 
-def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False):
+# Corrections from the 2026-09-18 review, applied to every run by --corrected:
+# earliest-deadline-first among savable vulnerable transactions, and no
+# commit-reveal for the un-migratable share.
+CORRECTED = {"expired_last": True, "legacy_commit_reveal": False}
+
+
+def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
+        overrides: dict | None = None):
     out_dir.mkdir(parents=True, exist_ok=True)
     sr = range(1, (5 if quick else seeds) + 1)
     rows: list[dict] = []
@@ -76,6 +84,8 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False):
         for rate in (20.0, 24.0, 28.0, 32.0, 36.0):
             for p in MAIN:
                 _run(rows, "congestion", sr, policy=p, arrival_rate=rate)
+            if overrides:
+                _run(rows, "congestion", sr, policy="ecdsa-ordered", arrival_rate=rate)
 
         for tb in (15, 30, 60, 120, 240):
             for p in MAIN:
@@ -98,6 +108,8 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False):
             _run(rows, "ablation", sr, policy=p)
         _run(rows, "ablation", sr, policy="qsentry", migration_budget=False)
         _run(rows, "ablation", sr, policy="qsentry", deadline_order=False)
+        if overrides:
+            _run(rows, "ablation", sr, policy="ecdsa-ordered")
 
         for v in (1.0, 4.0, 8.0, 20.0, 60.0):
             _run(rows, "v-sweep", sr, policy="qsentry", control_v=v)
@@ -146,7 +158,7 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False):
         # Concealment by commit-reveal, alone and composed with slack ordering.  At
         # 32 tx/s the commit overhead itself lifts the byte load past capacity.
         for rate in (26.0, 32.0):
-            for p in ("ecdsa-only", "qsentry"):
+            for p in ("ecdsa-only", "qsentry") + (("ecdsa-ordered",) if overrides else ()):
                 for cr in (False, True):
                     _run(rows, "conceal", sr, policy=p, arrival_rate=rate, commit_reveal=cr)
         # Probes of the deterministic window bound W < Delta ceil(b0 / b_c), at the
@@ -167,6 +179,9 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False):
                      duration_blocks=100 + mb)
                 _run(rows, "horizon", hr, policy="qsentry", arrival_rate=rate,
                      duration_blocks=100 + mb, migration_budget=False)
+
+        if overrides:
+            rows = [(e, s, {**overrides, **kw}) for e, s, kw in rows]
 
         from concurrent.futures import ProcessPoolExecutor
         import os
@@ -288,14 +303,15 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False):
     plt.close(fig)
 
     # Figure 5: a representative trace through two demand surges
-    _, trace = simulate(Config(policy="qsentry", seed=2026, arrival_rate=32.0, duration_blocks=360),
+    ov = overrides or {}
+    _, trace = simulate(Config(policy="qsentry", seed=2026, arrival_rate=32.0, duration_blocks=360, **ov),
                         keep_trace=True)
     trace.to_csv(out_dir / "trace_qsentry.csv", index=False, lineterminator="\n")
-    _, base = simulate(Config(policy="ecdsa-only", seed=2026, arrival_rate=32.0, duration_blocks=360),
+    _, base = simulate(Config(policy="ecdsa-only", seed=2026, arrival_rate=32.0, duration_blocks=360, **ov),
                        keep_trace=True)
     base.to_csv(out_dir / "trace_ecdsa.csv", index=False, lineterminator="\n")
     _, nobud = simulate(Config(policy="qsentry", seed=2026, arrival_rate=32.0, duration_blocks=360,
-                               migration_budget=False), keep_trace=True)
+                               migration_budget=False, **ov), keep_trace=True)
     nobud.to_csv(out_dir / "trace_qsentry_nobudget.csv", index=False, lineterminator="\n")
     fig, ax = plt.subplots(figsize=(7.2, 2.4))
     ax.plot(base.time_s, base.vulnerable_window_s, color="#4d4d4d",

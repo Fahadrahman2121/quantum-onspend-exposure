@@ -51,6 +51,7 @@ POLICIES = (
     "fee-optimal",      # block-space optimal, blind to exposure
     "qsentry",          # proposed
     "qsentry-no-vq",    # ablation: fixed penalty weight instead of a virtual queue
+    "ecdsa-ordered",    # no migration at all, slack ordering only: the free lever alone
 )
 
 
@@ -114,6 +115,18 @@ class Config:
     # post-quantum backlog grows without bound at congested loads.
     migration_budget: bool = True
     budget_margin: float = 0.9
+    # Slack ordering that skips the lost cause.  A vulnerable transaction whose
+    # window at this block would already exceed T_b is at risk however soon it
+    # is included, so serving it first spends block space that could still save
+    # a younger one.  True serves the still-savable vulnerable transactions
+    # first (earliest deadline first), then the expired ones, then the rest.
+    # False is the oldest-first order of the first submission.
+    expired_last: bool = False
+    # Whether un-migratable senders can use commit-reveal.  The un-migratable
+    # share is un-upgraded wallets and fixed-ECDSA accounts, which cannot run a
+    # new admission protocol either, so False is the consistent setting.  True
+    # reproduces the first submission, where every sender concealed.
+    legacy_commit_reveal: bool = True
 
 
 # Recorded arrival traces for replay, registered by name so that a Config stays
@@ -155,6 +168,7 @@ def _feasible(policy: str, is_legacy: bool) -> tuple[str, ...]:
         "fee-optimal": CRED_NAMES,
         "qsentry": CRED_NAMES,
         "qsentry-no-vq": CRED_NAMES,
+        "ecdsa-ordered": ("ecdsa",),
     }[policy]
 
 
@@ -240,8 +254,9 @@ def simulate(config: Config, keep_trace: bool = False):
             for is_legacy, count, payload in items:
                 if count <= 0:
                     continue
+                conceals = config.commit_reveal and (config.legacy_commit_reveal or not is_legacy)
                 offered_bytes += count * (tx_bytes("ecdsa", payload)
-                                          + (config.commit_bytes if config.commit_reveal else 0.0))
+                                          + (config.commit_bytes if conceals else 0.0))
                 best = None
                 for cred in _feasible(config.policy, is_legacy):
                     b = tx_bytes(cred, payload)
@@ -280,7 +295,7 @@ def simulate(config: Config, keep_trace: bool = False):
                 if not CREDENTIALS[cred]["vulnerable"]:
                     extra_bytes += count * (per_tx - tx_bytes("ecdsa", payload))
                 lg = 1 if is_legacy else 0
-                if config.commit_reveal:
+                if conceals:
                     mempool.append([now, count, CRED_NAMES.index(cred), config.commit_bytes, 2, now, lg])
                     pending_bytes += count * config.commit_bytes
                 else:
@@ -305,7 +320,7 @@ def simulate(config: Config, keep_trace: bool = False):
 
         # ---------------- block production ----------------
         if (slot + 1) % config.slots_per_block == 0:
-            if config.deadline_order and config.policy in ("qsentry", "qsentry-no-vq") \
+            if config.deadline_order and config.policy in ("qsentry", "qsentry-no-vq", "ecdsa-ordered") \
                     and len(mempool) > 1:
                 # Vulnerable transactions carry a deadline at the break time;
                 # post-quantum ones do not, so they yield.  This reordering
@@ -339,6 +354,23 @@ def simulate(config: Config, keep_trace: bool = False):
                         merged.extend(vulnerable)
                         merged.extend(promoted)
                         vulnerable = merged
+                if config.expired_last and vulnerable:
+                    # Earliest deadline first among the transactions that can
+                    # still meet it.  A vulnerable entry included in this block
+                    # has window (now + slot_s) - arrival; past T_b it is lost
+                    # whatever the order, so it yields to the savable ones but
+                    # still precedes post-quantum traffic.
+                    incl_t = now + slot_s
+                    savable: deque[list] = deque()
+                    expired: deque[list] = deque()
+                    for e in vulnerable:
+                        if CREDENTIALS[CRED_NAMES[e[2]]]["vulnerable"] \
+                                and incl_t - e[0] > config.break_time_s:
+                            expired.append(e)
+                        else:
+                            savable.append(e)
+                    savable.extend(expired)
+                    vulnerable = savable
                 if config.vulnerable_cap < 1.0 and other:
                     # Reservation: the vulnerable class goes first only up to
                     # vulnerable_cap of the block; post-quantum transactions
@@ -544,10 +576,13 @@ def main():
     parser.add_argument("--quick", action="store_true")
     parser.add_argument("--figures-only", action="store_true",
                         help="regenerate figures, tables and manifest from results/results.csv")
+    parser.add_argument("--corrected", action="store_true",
+                        help="apply the 2026-09-18 review corrections to every run")
     args = parser.parse_args()
     import suite
 
-    data = suite.run(args.out, args.seeds, args.quick, figures_only=args.figures_only)
+    data = suite.run(args.out, args.seeds, args.quick, figures_only=args.figures_only,
+                     overrides=suite.CORRECTED if args.corrected else None)
     print(f"wrote {len(data)} simulation runs to {args.out}")
 
 

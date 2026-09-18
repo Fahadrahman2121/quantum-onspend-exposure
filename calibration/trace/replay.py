@@ -51,8 +51,16 @@ def window(hour: int):
     return tr, obs
 
 
+# QSENTRY_CORRECTED=1 applies the 2026-09-18 review corrections and writes
+# replay_results_corrected.json, leaving the published file untouched.
+import os  # noqa: E402
+CORRECTED = os.environ.get("QSENTRY_CORRECTED") == "1"
+OVR = {"expired_last": True, "legacy_commit_reveal": False} if CORRECTED else {}
+POLICIES_RUN = ("ecdsa-only", "qsentry") + (("ecdsa-ordered",) if CORRECTED else ())
+
+
 def run(name, policy, B, seeds=SEEDS, **kw):
-    rows = [m.simulate(m.Config(policy=policy, seed=s, block_bytes=B, trace_name=name, **CFG, **kw))[0]
+    rows = [m.simulate(m.Config(policy=policy, seed=s, block_bytes=B, trace_name=name, **CFG, **OVR, **kw))[0]
             for s in range(1, seeds + 1)]
     keys = ["at_risk_fraction", "at_risk_fraction_legacy", "at_risk_fraction_vuln", "inclusion_ratio", "window_mean_s",
             "window_p95_s", "window_legacy_mean_s", "mean_offered_tps", "bytes_per_tx", "share_falcon"]
@@ -93,10 +101,11 @@ for label, hour in (("busiest hour (10:00 UTC)", 10), ("quiet hour (03:00 UTC)",
     # target mean utilisation (offered bytes per block over block bytes).
     caps = [("fitted", B)] + [("util-%.2f" % u, o["bytes_per_s_ecdsa"] * 12.0 / u) for u in (0.80, 0.90, 0.95, 1.00)]
     for tag, cap in caps:
-        for policy in ("ecdsa-only", "qsentry"):
+        for policy in POLICIES_RUN:
             o["%s_%s" % (tag, policy)] = run(name, policy, cap)
             o["%s_%s" % (tag, policy)]["block_bytes"] = float(cap)
     out[label] = o
     print(label, json.dumps(o, indent=1))
-json.dump(out, open("replay_results.json", "w"), indent=1)
-print("wrote replay_results.json")
+OUTF = "replay_results_corrected.json" if CORRECTED else "replay_results.json"
+json.dump(out, open(OUTF, "w"), indent=1)
+print("wrote", OUTF)
