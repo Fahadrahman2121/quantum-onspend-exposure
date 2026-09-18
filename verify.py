@@ -72,19 +72,21 @@ def derive(summary: Path) -> list[tuple[str, str]]:
         return float(con[(con.policy == policy) & (con.arrival_rate == rate)].iloc[0][col])
 
     for rate in sorted(con.arrival_rate.unique()):
-        out.append(("congestion %g tx/s, un-migr at risk: ECDSA / FN-DSA / ML-DSA / QSentry" % rate,
-                    " / ".join("%.4f" % at(p, rate) for p in ("ecdsa-only", "falcon-only", "mldsa-only", "qsentry"))))
-        out.append(("congestion %g tx/s, inclusion: ECDSA / FN-DSA / ML-DSA / QSentry" % rate,
+        out.append(("congestion %g tx/s, un-migr at risk: ECDSA / ECDSA ordered / FN-DSA / ML-DSA / QSentry" % rate,
+                    " / ".join("%.4f" % at(p, rate) for p in ("ecdsa-only", "ecdsa-ordered", "falcon-only", "mldsa-only", "qsentry"))))
+        out.append(("congestion %g tx/s, inclusion: ECDSA / ECDSA ordered / FN-DSA / ML-DSA / QSentry" % rate,
                     " / ".join("%.3f" % at(p, rate, "inclusion_ratio_mean")
-                               for p in ("ecdsa-only", "falcon-only", "mldsa-only", "qsentry"))))
+                               for p in ("ecdsa-only", "ecdsa-ordered", "falcon-only", "mldsa-only", "qsentry"))))
 
     abl = s[s.experiment == "ablation"]
 
-    def ab(policy, budget=True, order=True):
-        r = abl[(abl.policy == policy) & (abl.migration_budget == budget) & (abl.deadline_order == order)]
+    def ab(policy, budget=True, order=True, expired_last=True):
+        r = abl[(abl.policy == policy) & (abl.migration_budget == budget) & (abl.deadline_order == order)
+                & (abl.expired_last == expired_last)]
         return r.iloc[0]
 
-    for lab, r in (("block-space optimal", ab("fee-optimal")), ("QSentry", ab("qsentry")),
+    for lab, r in (("block-space optimal", ab("fee-optimal")), ("ECDSA slack order", ab("ecdsa-ordered")),
+                   ("QSentry", ab("qsentry")), ("QSentry oldest first", ab("qsentry", expired_last=False)),
                    ("QSentry no budget", ab("qsentry", budget=False)),
                    ("QSentry no ordering", ab("qsentry", order=False)),
                    ("QSentry fixed weight", ab("qsentry-no-vq")), ("hybrid only", ab("hybrid-only"))):
@@ -100,24 +102,26 @@ def derive(summary: Path) -> list[tuple[str, str]]:
                 "yes, all %d points" % len(ch) if not viol else "NO: %s" % viol))
     for iv in sorted(ch.block_interval_s.unique()):
         e = ch[(ch.policy == "ecdsa-only") & (ch.block_interval_s == iv)].iloc[0]
+        o = ch[(ch.policy == "ecdsa-ordered") & (ch.block_interval_s == iv)].iloc[0]
         q = ch[(ch.policy == "qsentry") & (ch.block_interval_s == iv)].iloc[0]
-        out.append(("chain %g s: floor / ECDSA vuln / QSentry vuln" % iv,
-                    "%.3f / %.4f / %.4f" % (e["exposure_floor_mean"], e[MV], q[MV])))
+        out.append(("chain %g s: floor / un-migr ECDSA / ECDSA ordered / QSentry" % iv,
+                    "%.3f / %.4f / %.4f / %.4f" % (e["exposure_floor_mean"], e[M], o[M], q[M])))
 
     bt = s[s.experiment == "breaktime"]
     for tb in sorted(bt.break_time_s.unique()):
-        out.append(("break time %g s: un-migr ECDSA / QSentry" % tb, "%.4f / %.4f" % (
+        out.append(("break time %g s: un-migr ECDSA / ECDSA ordered / QSentry" % tb, "%.4f / %.4f / %.4f" % (
             float(bt[(bt.policy == "ecdsa-only") & (bt.break_time_s == tb)].iloc[0][M]),
+            float(bt[(bt.policy == "ecdsa-ordered") & (bt.break_time_s == tb)].iloc[0][M]),
             float(bt[(bt.policy == "qsentry") & (bt.break_time_s == tb)].iloc[0][M]))))
 
     lg = s[s.experiment == "legacy"]
-    for pol in ("ecdsa-only", "falcon-only", "qsentry"):
+    for pol in ("ecdsa-only", "ecdsa-ordered", "falcon-only", "qsentry"):
         sub = lg[lg.policy == pol].sort_values("legacy_fraction")
         out.append(("phi 0.05/0.15/0.30/0.50/0.80, un-migr at risk, %s" % pol,
                     " / ".join("%.4f" % v for v in sub[M])))
 
     pr = s[s.experiment == "provisioning"]
-    for pol in ("ecdsa-only", "falcon-only", "qsentry"):
+    for pol in ("ecdsa-only", "ecdsa-ordered", "falcon-only", "qsentry"):
         sub = pr[pr.policy == pol].sort_values("block_bytes")
         out.append(("provisioning 150/250/400/600/900 kB, un-migr at risk, %s" % pol,
                     " / ".join("%.4f" % v for v in sub[M])))
@@ -135,7 +139,7 @@ def derive(summary: Path) -> list[tuple[str, str]]:
 
     for mean in (38, 30):
         fm = s[s.experiment == "burstiness-mean%d" % mean]
-        for pol in ("ecdsa-only", "qsentry"):
+        for pol in ("ecdsa-only", "ecdsa-ordered", "qsentry"):
             e = fm[fm.policy == pol].sort_values("surge_multiplier")
             out.append(("burstiness mean %d tx/s, %s, multipliers 1/2/4/6" % (mean, pol),
                         " / ".join("%.4f" % v for v in e[M])))
@@ -145,6 +149,8 @@ def derive(summary: Path) -> list[tuple[str, str]]:
     ea = fl[fl.policy == "ecdsa-only"].sort_values("attack_rate")
     out.append(("flood QSentry un-migr at risk, attack 0/5/10/20", " / ".join("%.4f" % v for v in qa[M])))
     out.append(("flood ECDSA-only un-migr at risk, attack 0/5/10/20", " / ".join("%.4f" % v for v in ea[M])))
+    oa = fl[fl.policy == "ecdsa-ordered"].sort_values("attack_rate")
+    out.append(("flood ECDSA ordered un-migr at risk, attack 0/5/10/20", " / ".join("%.4f" % v for v in oa[M])))
     out.append(("flood QSentry PQ inclusion, attack 0/5/10/20",
                 " / ".join("%.4f" % v for v in qa["inclusion_ratio_pq_mean"])))
     a20 = qa[qa.attack_rate == 20.0].iloc[0]
@@ -156,7 +162,7 @@ def derive(summary: Path) -> list[tuple[str, str]]:
                     "%.4f / %.4f" % (r[M], r["inclusion_ratio_pq_mean"])))
 
     cz = s[(s.experiment == "conceal") & (s.commit_bytes == 100.0) & (s.break_time_s == 60.0)]
-    for pol in ("ecdsa-only", "qsentry"):
+    for pol in ("ecdsa-only", "ecdsa-ordered", "qsentry"):
         for rate in (26.0, 32.0):
             for cr in (False, True):
                 r = cz[(cz.policy == pol) & (cz.arrival_rate == rate) & (cz.commit_reveal == cr)].iloc[0]
@@ -178,7 +184,8 @@ def derive(summary: Path) -> list[tuple[str, str]]:
 
     hz = s[s.experiment == "horizon"]
     for rate in (32.0, 38.0):
-        for lab, pol, bud in (("ECDSA", "ecdsa-only", True), ("QSentry", "qsentry", True),
+        for lab, pol, bud in (("ECDSA", "ecdsa-only", True), ("ECDSA ordered", "ecdsa-ordered", True),
+                              ("QSentry", "qsentry", True),
                               ("QSentry no budget", "qsentry", False)):
             sub = hz[(hz.arrival_rate == rate) & (hz.policy == pol) & (hz.migration_budget == bud)].sort_values("duration_blocks")
             out.append(("horizon %g tx/s %s, vuln at risk @200/1000/5000 blocks" % (rate, lab),
@@ -201,7 +208,7 @@ def main() -> int:
     if not args.numbers_only:
         tmp = Path(tempfile.mkdtemp(prefix="qsentry-verify-"))
         try:
-            print("running the suite into %s (this takes about ten minutes)" % tmp)
+            print("running the suite into %s (this takes about an hour)" % tmp)
             r = subprocess.run(
                 [sys.executable, str(HERE / "qsentry_sim.py"), "--out", str(tmp),
                  "--seeds", str(args.seeds)],

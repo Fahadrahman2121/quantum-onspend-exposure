@@ -1,0 +1,56 @@
+"""Refresh README.md's run counts and experiment table from results/results.csv, and
+state the corrected defaults.  Run after the suite; it only rewrites the README."""
+import pathlib, re
+import pandas as pd
+
+HERE = pathlib.Path(__file__).parent
+r = pd.read_csv(HERE / "results" / "results.csv", usecols=["experiment"])
+counts = r.experiment.value_counts()
+readme = HERE / "README.md"
+t = readme.read_text(encoding="utf-8")
+
+WHAT = {
+    "congestion": "between-surge load 20-36 tx/s, the whole stable range, five policies including ECDSA with slack order",
+    "breaktime": "adversary break time `T_b`",
+    "legacy": "the share of demand that cannot migrate",
+    "provisioning": "block capacity",
+    "chain": "block interval, isolating the theoretical floor",
+    "epsilon": "the exposure target",
+    "burstiness-mean38": "demand surge multiplier with the long-run mean load held at 38 tx/s",
+    "burstiness-mean30": "demand surge multiplier with the long-run mean load held at 30 tx/s",
+    "ablation": "mechanism ablations: no budget, no ordering, fixed weight, oldest-first ordering, ordering alone",
+    "v-sweep": "the cost-exposure weight `V`",
+    "verify": "verification budget (sensitivity check)",
+    "flood": "an adversarial flood of vulnerable transactions, and a per-block reservation against it",
+    "aging": "bounded deferral for post-quantum transactions (tested and rejected)",
+    "conceal": "concealment by commit-reveal for migratable senders, alone and composed with slack ordering, plus probes",
+    "horizon": "run length 200/1000/5000 blocks on a stable (32 tx/s) and an overloaded (38 tx/s) chain, 10 seeds",
+}
+rows = "\n".join("| `%s` | %d | %s |" % (e, counts[e], WHAT[e]) for e in counts.sort_values(ascending=False).index)
+i = t.index("| Experiment | Runs | What it varies |")
+j = t.index("\n\n", i)
+t = t[:i] + "| Experiment | Runs | What it varies |\n|---|---|---|\n" + rows + t[j:]
+t = re.sub(r"The suite runs [\d,]+ configurations", "The suite runs {:,} configurations".format(len(r)), t)
+t = t.replace("python qsentry_sim.py --out results --seeds 30      # ~10 minutes",
+              "python qsentry_sim.py --out results --seeds 30      # about an hour")
+t = t.replace("| `suite.py` | fifteen experiments, five figures,", "| `suite.py` | %s experiments, five figures," %
+              {15: "fifteen", 16: "sixteen"}[counts.size])
+NOTE = """## Corrections of 18 September 2026
+
+The defaults carry two corrections found in review. Slack ordering now triages: it serves
+first the vulnerable transactions that can still meet their deadline, then those already past
+it, then post-quantum traffic (`Config.expired_last`). The first version served the oldest
+first, expired ones included, which is optimal only while nothing has expired. And the
+un-migratable share can no longer use commit-reveal (`Config.legacy_commit_reveal`), since it
+runs no new protocol. A new policy, `ecdsa-ordered`, uses the ordering alone with no migration,
+and appears in every sweep where it separates the two levers. To reproduce the first submission:
+
+```bash
+python qsentry_sim.py --out results_published --seeds 30 --published
+```
+
+"""
+if "## Corrections of 18 September 2026" not in t:
+    t = t.replace("## What is here", NOTE + "## What is here")
+readme.write_text(t, encoding="utf-8", newline="\n")
+print("README updated:", len(r), "runs,", counts.size, "experiments")

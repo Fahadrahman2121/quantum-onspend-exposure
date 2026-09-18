@@ -16,7 +16,7 @@ repository studies it as one.
 
 ```bash
 pip install -r requirements.txt
-python qsentry_sim.py --out results --seeds 30      # ~10 minutes
+python qsentry_sim.py --out results --seeds 30      # about an hour
 ```
 
 One command regenerates every figure and every table in the paper. No output is edited by
@@ -33,6 +33,20 @@ python verify.py
 `results/manifest.json`, re-derives each quoted figure from `results/summary.csv`, and
 exits non-zero on any mismatch. Use `--numbers-only` to skip the rerun.
 
+## Corrections of 18 September 2026
+
+The defaults carry two corrections found in review. Slack ordering now triages: it serves
+first the vulnerable transactions that can still meet their deadline, then those already past
+it, then post-quantum traffic (`Config.expired_last`). The first version served the oldest
+first, expired ones included, which is optimal only while nothing has expired. And the
+un-migratable share can no longer use commit-reveal (`Config.legacy_commit_reveal`), since it
+runs no new protocol. A new policy, `ecdsa-ordered`, uses the ordering alone with no migration,
+and appears in every sweep where it separates the two levers. To reproduce the first submission:
+
+```bash
+python qsentry_sim.py --out results_published --seeds 30 --published
+```
+
 ## What is here
 
 | File | Contents |
@@ -48,7 +62,7 @@ exits non-zero on any mismatch. Use `--numbers-only` to skip the rerun.
 
 ## Experiments
 
-`results/results.csv` carries an `experiment` column. The suite runs 5,070 configurations
+`results/results.csv` carries an `experiment` column. The suite runs 6,450 configurations
 across 30 independent seeds on 4 worker processes. Every run lasts 1,100 blocks with a 100-block
 warm-up and no mempool reset; exposure is measured over the cohort broadcast after warm-up,
 counting a vulnerable transaction still pending at the end and older than T_b as at risk.
@@ -56,21 +70,21 @@ The nominal load is 32 tx/s between surges (mean 49.8 tx/s, 85% of ECDSA capacit
 
 | Experiment | Runs | What it varies |
 |---|---|---|
-| `congestion` | 600 | between-surge load 20-36 tx/s, the whole stable range, four policies |
-| `breaktime` | 600 | adversary break time `T_b` |
-| `legacy` | 450 | the share of demand that cannot migrate |
-| `provisioning` | 450 | block capacity |
-| `chain` | 360 | block interval, isolating the theoretical floor |
+| `congestion` | 750 | between-surge load 20-36 tx/s, the whole stable range, five policies including ECDSA with slack order |
+| `breaktime` | 750 | adversary break time `T_b` |
+| `legacy` | 600 | the share of demand that cannot migrate |
+| `provisioning` | 600 | block capacity |
+| `flood` | 600 | an adversarial flood of vulnerable transactions, and a per-block reservation against it |
+| `chain` | 540 | block interval, isolating the theoretical floor |
+| `conceal` | 480 | concealment by commit-reveal for migratable senders, alone and composed with slack ordering, plus probes |
+| `burstiness-mean38` | 360 | demand surge multiplier with the long-run mean load held at 38 tx/s |
+| `burstiness-mean30` | 360 | demand surge multiplier with the long-run mean load held at 30 tx/s |
 | `epsilon` | 300 | the exposure target |
-| `burstiness-mean38` | 240 | demand surge multiplier with the long-run mean load held at 38 tx/s |
-| `burstiness-mean30` | 240 | demand surge multiplier with the long-run mean load held at 30 tx/s |
-| `ablation` | 180 | mechanism ablations, including QSentry without the migration budget and without slack ordering |
-| `v-sweep` | 150 | the cost-exposure weight `V` |
-| `verify` | 180 | verification budget (sensitivity check) |
-| `flood` | 480 | an adversarial flood of vulnerable transactions, and a per-block reservation against it |
 | `aging` | 300 | bounded deferral for post-quantum transactions (tested and rejected) |
-| `conceal` | 360 | concealment by commit-reveal, alone and composed with slack ordering, plus probes of the window bound |
-| `horizon` | 180 | run length 200/1000/5000 blocks on a stable (32 tx/s) and an overloaded (38 tx/s) chain, 10 seeds |
+| `ablation` | 240 | mechanism ablations: no budget, no ordering, fixed weight, oldest-first ordering, ordering alone |
+| `horizon` | 240 | run length 200/1000/5000 blocks on a stable (32 tx/s) and an overloaded (38 tx/s) chain, 10 seeds |
+| `verify` | 180 | verification budget (sensitivity check) |
+| `v-sweep` | 150 | the cost-exposure weight `V` |
 
 ## Reference environment
 

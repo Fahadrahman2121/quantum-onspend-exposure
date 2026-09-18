@@ -121,12 +121,12 @@ class Config:
     # a younger one.  True serves the still-savable vulnerable transactions
     # first (earliest deadline first), then the expired ones, then the rest.
     # False is the oldest-first order of the first submission.
-    expired_last: bool = False
+    expired_last: bool = True
     # Whether un-migratable senders can use commit-reveal.  The un-migratable
     # share is un-upgraded wallets and fixed-ECDSA accounts, which cannot run a
     # new admission protocol either, so False is the consistent setting.  True
     # reproduces the first submission, where every sender concealed.
-    legacy_commit_reveal: bool = True
+    legacy_commit_reveal: bool = False
 
 
 # Recorded arrival traces for replay, registered by name so that a Config stays
@@ -576,13 +576,16 @@ def main():
     parser.add_argument("--quick", action="store_true")
     parser.add_argument("--figures-only", action="store_true",
                         help="regenerate figures, tables and manifest from results/results.csv")
+    parser.add_argument("--published", action="store_true",
+                        help="reproduce the first submission: oldest-first ordering and "
+                             "commit-reveal for every sender")
     parser.add_argument("--corrected", action="store_true",
-                        help="apply the 2026-09-18 review corrections to every run")
+                        help="accepted for compatibility; the corrections are now the default")
     args = parser.parse_args()
     import suite
 
     data = suite.run(args.out, args.seeds, args.quick, figures_only=args.figures_only,
-                     overrides=suite.CORRECTED if args.corrected else None)
+                     overrides=suite.PUBLISHED if args.published else None)
     print(f"wrote {len(data)} simulation runs to {args.out}")
 
 

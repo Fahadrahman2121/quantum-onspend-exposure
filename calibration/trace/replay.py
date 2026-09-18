@@ -51,12 +51,12 @@ def window(hour: int):
     return tr, obs
 
 
-# QSENTRY_CORRECTED=1 applies the 2026-09-18 review corrections and writes
-# replay_results_corrected.json, leaving the published file untouched.
+# The simulator's defaults carry the 2026-09-18 review corrections.
+# QSENTRY_PUBLISHED=1 reproduces the first submission's replay instead.
 import os  # noqa: E402
-CORRECTED = os.environ.get("QSENTRY_CORRECTED") == "1"
-OVR = {"expired_last": True, "legacy_commit_reveal": False} if CORRECTED else {}
-POLICIES_RUN = ("ecdsa-only", "qsentry") + (("ecdsa-ordered",) if CORRECTED else ())
+PUBLISHED = os.environ.get("QSENTRY_PUBLISHED") == "1"
+OVR = {"expired_last": False, "legacy_commit_reveal": True} if PUBLISHED else {}
+POLICIES_RUN = ("ecdsa-only", "qsentry") + (() if PUBLISHED else ("ecdsa-ordered",))
 
 
 def run(name, policy, B, seeds=SEEDS, **kw):
@@ -106,6 +106,6 @@ for label, hour in (("busiest hour (10:00 UTC)", 10), ("quiet hour (03:00 UTC)",
             o["%s_%s" % (tag, policy)]["block_bytes"] = float(cap)
     out[label] = o
     print(label, json.dumps(o, indent=1))
-OUTF = "replay_results_corrected.json" if CORRECTED else "replay_results.json"
+OUTF = "replay_results_published.json" if PUBLISHED else "replay_results.json"
 json.dump(out, open(OUTF, "w"), indent=1)
 print("wrote", OUTF)

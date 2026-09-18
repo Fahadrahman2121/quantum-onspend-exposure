@@ -15,7 +15,9 @@ from scipy import stats
 
 from qsentry_sim import POLICIES, Config, exposure_floor, simulate
 
-MAIN = ("ecdsa-only", "falcon-only", "mldsa-only", "qsentry")
+MAIN = ("ecdsa-only", "ecdsa-ordered", "falcon-only", "mldsa-only", "qsentry")
+# The baseline that separates the free lever from migration: ECDSA only, slack order.
+ORD = ("ecdsa-only", "ecdsa-ordered", "qsentry")
 STYLE = {
     "ecdsa-only": ("#4d4d4d", "o", "ECDSA only"),
     "falcon-only": ("#74c476", "^", "FN-DSA only"),
@@ -24,7 +26,7 @@ STYLE = {
     "fee-optimal": ("#3182bd", "P", "block-space optimal"),
     "qsentry": ("#756bb1", "D", "QSentry"),
     "qsentry-no-vq": ("#d62728", "X", "QSentry, fixed weight"),
-    "ecdsa-ordered": ("#9e9ac8", "d", "ECDSA, slack order"),
+    "ecdsa-ordered": ("#1b9e77", "d", "ECDSA, slack order"),
 }
 PDF = {"bbox_inches": "tight", "metadata": {"CreationDate": None}}
 
@@ -62,10 +64,11 @@ def _job(args):
     return row
 
 
-# Corrections from the 2026-09-18 review, applied to every run by --corrected:
-# earliest-deadline-first among savable vulnerable transactions, and no
-# commit-reveal for the un-migratable share.
-CORRECTED = {"expired_last": True, "legacy_commit_reveal": False}
+# The first submission, reproduced by --published: oldest-first slack ordering
+# (which serves transactions already past T_b ahead of savable ones) and
+# commit-reveal for every sender, the un-migratable share included.  The
+# defaults in Config are the corrected behaviour of the 2026-09-18 review.
+PUBLISHED = {"expired_last": False, "legacy_commit_reveal": True}
 
 
 def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
@@ -84,8 +87,6 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
         for rate in (20.0, 24.0, 28.0, 32.0, 36.0):
             for p in MAIN:
                 _run(rows, "congestion", sr, policy=p, arrival_rate=rate)
-            if overrides:
-                _run(rows, "congestion", sr, policy="ecdsa-ordered", arrival_rate=rate)
 
         for tb in (15, 30, 60, 120, 240):
             for p in MAIN:
@@ -94,12 +95,12 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
         # Chain type.  Block capacity is held per unit time so that only the
         # interval changes, isolating the residual-block-time floor.
         for interval in (2.0, 6.0, 12.0, 60.0, 150.0, 600.0):
-            for p in ("ecdsa-only", "qsentry"):
+            for p in ORD:
                 _run(rows, "chain", sr, policy=p, block_interval_s=interval,
                      block_bytes=250_000.0 * interval / 12.0)
 
         for phi in (0.05, 0.15, 0.30, 0.50, 0.80):
-            for p in ("ecdsa-only", "falcon-only", "qsentry"):
+            for p in ("ecdsa-only", "ecdsa-ordered", "falcon-only", "qsentry"):
                 _run(rows, "legacy", sr, policy=p, legacy_fraction=phi)
 
         # Ablation at the nominal load: what each mechanism contributes, including
@@ -108,8 +109,9 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
             _run(rows, "ablation", sr, policy=p)
         _run(rows, "ablation", sr, policy="qsentry", migration_budget=False)
         _run(rows, "ablation", sr, policy="qsentry", deadline_order=False)
-        if overrides:
-            _run(rows, "ablation", sr, policy="ecdsa-ordered")
+        _run(rows, "ablation", sr, policy="ecdsa-ordered")
+        # The ordering of the first submission: oldest first, expired included.
+        _run(rows, "ablation", sr, policy="qsentry", expired_last=False)
 
         for v in (1.0, 4.0, 8.0, 20.0, 60.0):
             _run(rows, "v-sweep", sr, policy="qsentry", control_v=v)
@@ -120,7 +122,7 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
 
         # Provisioning: how much block space does each policy need?
         for bb in (150_000.0, 250_000.0, 400_000.0, 600_000.0, 900_000.0):
-            for p in ("ecdsa-only", "falcon-only", "qsentry"):
+            for p in ("ecdsa-only", "ecdsa-ordered", "falcon-only", "qsentry"):
                 _run(rows, "provisioning", sr, policy=p, block_bytes=bb)
 
         # Burstiness at FIXED MEAN load: the between-surge rate is scaled so that the
@@ -131,7 +133,7 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
         for mean in (38.0, 30.0):
             for sm in (1.0, 2.0, 4.0, 6.0):
                 base = mean / (1.0 + pi_surge * (sm - 1.0))
-                for p in ("ecdsa-only", "qsentry"):
+                for p in ORD:
                     _run(rows, "burstiness-mean%d" % int(mean), sr, policy=p,
                          arrival_rate=base, surge_multiplier=sm)
 
@@ -147,8 +149,8 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
             for cap in (1.0, 0.7, 0.5):
                 _run(rows, "flood", sr, policy="qsentry", arrival_rate=26.0,
                      attack_rate=atk, vulnerable_cap=cap)
-            _run(rows, "flood", sr, policy="ecdsa-only", arrival_rate=26.0,
-                 attack_rate=atk)
+            for p in ("ecdsa-only", "ecdsa-ordered"):
+                _run(rows, "flood", sr, policy=p, arrival_rate=26.0, attack_rate=atk)
 
         # Bounded deferral for post-quantum transactions.
         for rate in (32.0, 26.0):
@@ -158,7 +160,7 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
         # Concealment by commit-reveal, alone and composed with slack ordering.  At
         # 32 tx/s the commit overhead itself lifts the byte load past capacity.
         for rate in (26.0, 32.0):
-            for p in ("ecdsa-only", "qsentry") + (("ecdsa-ordered",) if overrides else ()):
+            for p in ORD:
                 for cr in (False, True):
                     _run(rows, "conceal", sr, policy=p, arrival_rate=rate, commit_reveal=cr)
         # Probes of the deterministic window bound W < Delta ceil(b0 / b_c), at the
@@ -174,6 +176,8 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
         for mb in (200, 1000, 5000):
             for rate in (32.0, 38.0):
                 _run(rows, "horizon", hr, policy="ecdsa-only", arrival_rate=rate,
+                     duration_blocks=100 + mb)
+                _run(rows, "horizon", hr, policy="ecdsa-ordered", arrival_rate=rate,
                      duration_blocks=100 + mb)
                 _run(rows, "horizon", hr, policy="qsentry", arrival_rate=rate,
                      duration_blocks=100 + mb)
@@ -204,7 +208,7 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
              "verify_budget_per_block", "block_bytes", "surge_multiplier",
              "exposure_target", "attack_rate", "vulnerable_cap", "pq_max_wait",
              "commit_reveal", "commit_bytes", "migration_budget", "deadline_order",
-             "duration_blocks"]
+             "duration_blocks", "expired_last", "legacy_commit_reveal"]
     summary = data.groupby(group, dropna=False)[metrics].agg(["mean", ci95]).reset_index()
     summary.columns = ["_".join(str(x) for x in c if x).rstrip("_") for c in summary.columns]
     if not figures_only:   # a CSV round-trip would alter float formatting
@@ -248,13 +252,13 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
     panel(axes[0], "breaktime", "break_time_s", "at_risk_fraction_legacy", MAIN,
           r"Break time $T_b$ (s)", "At risk, un-migratable")
     panel(axes[1], "chain", "block_interval_s", "at_risk_fraction_legacy",
-          ("ecdsa-only", "qsentry"), r"Block interval $\Delta$ (s)",
+          ORD, r"Block interval $\Delta$ (s)",
           "At risk, un-migratable", logx=True)
     xs = np.logspace(np.log10(2.0), np.log10(600.0), 100)
     axes[1].plot(xs, [exposure_floor(60.0, x) for x in xs], color="#d62728",
                  linestyle="--", linewidth=1.2, label="_nolegend_")
     legend(axes[0], MAIN, loc="lower left")
-    legend(axes[1], ("ecdsa-only", "qsentry"),
+    legend(axes[1], ORD,
            extra=[Line2D([], [], color="#d62728", linestyle="--", linewidth=1.2,
                          label=r"floor $1-T_b/\Delta$")], loc="upper left")
     fig.tight_layout()
@@ -286,17 +290,17 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
     # figure is drawn small with the same font sizes the wide figures use.
     fig, axes = plt.subplots(1, 2, figsize=(3.6, 1.7))
     panel(axes[0], "provisioning", "block_bytes", "at_risk_fraction_legacy",
-          ("ecdsa-only", "falcon-only", "qsentry"),
+          ("ecdsa-only", "ecdsa-ordered", "falcon-only", "qsentry"),
           "Block capacity (kB)", "At risk, un-migratable", xdiv=1000.0)
     panel(axes[1], "burstiness-mean38", "surge_multiplier", "at_risk_fraction_legacy",
-          ("ecdsa-only", "qsentry"), "Surge multiplier (mean 38 tx/s)",
+          ORD, "Surge multiplier (mean 38 tx/s)",
           "At risk, un-migratable")
     for ax in axes:
         ax.tick_params(labelsize=6)
         ax.xaxis.label.set_size(6.5)
         ax.yaxis.label.set_size(6.5)
-    legend(axes[0], ("ecdsa-only", "falcon-only", "qsentry"), loc="center right", fontsize=5.5)
-    legend(axes[1], ("ecdsa-only", "qsentry"), loc="upper left", fontsize=5.5)
+    legend(axes[0], ("ecdsa-only", "ecdsa-ordered", "falcon-only", "qsentry"), loc="center right", fontsize=5.5)
+    legend(axes[1], ORD, loc="upper left", fontsize=5.5)
     fig.tight_layout(pad=0.4)
     fig.savefig(out_dir / "provisioning.pdf", **PDF)
     fig.savefig(out_dir / "provisioning.png", dpi=220, bbox_inches="tight")
@@ -343,18 +347,22 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
     abl = data[data.experiment == "ablation"]
     mb = abl.migration_budget.astype(bool)
     do = abl.deadline_order.astype(bool)
-    base = abl[(abl.policy == "qsentry") & mb & do].sort_values("seed")
+    el = abl.expired_last.astype(bool) if "expired_last" in abl else pd.Series(True, index=abl.index)
+    base = abl[(abl.policy == "qsentry") & mb & do & el].sort_values("seed")
     tests = []
     variants = {"fee-optimal": abl.policy == "fee-optimal",
                 "qsentry-no-vq": abl.policy == "qsentry-no-vq",
                 "hybrid-only": abl.policy == "hybrid-only",
                 "qsentry-no-budget": (abl.policy == "qsentry") & ~mb,
-                "qsentry-no-ordering": (abl.policy == "qsentry") & ~do}
+                "qsentry-no-ordering": (abl.policy == "qsentry") & ~do,
+                "ecdsa-ordered": abl.policy == "ecdsa-ordered",
+                "qsentry-oldest-first": (abl.policy == "qsentry") & ~el}
     for other, mask in variants.items():
         rhs = abl[mask].sort_values("seed")
         if rhs.empty:
             continue
-        for metric in ("at_risk_fraction_legacy", "at_risk_fraction_vuln", "at_risk_fraction", "bytes_per_tx"):
+        for metric in ("at_risk_fraction_legacy", "at_risk_fraction_vuln", "at_risk_fraction", "bytes_per_tx",
+                       "window_vuln_p95_s"):
             a, b = base[metric].to_numpy(), rhs[metric].to_numpy()
             if np.allclose(a, b):
                 w, pv = float("nan"), 1.0
