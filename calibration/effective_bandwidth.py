@@ -51,12 +51,14 @@ def mgf_b(theta: float, x: float, b1: float) -> float:
 
 def perron(theta: float, lam: float, x: float, b1: float,
            kappa: float, p01: float, p10: float) -> float:
+    """LOG of the Perron root of diag(h_k(theta)) P.  Worked in the log domain: h_k overflows a
+    float near the i.i.d. root, and an overflow caught as +inf makes the root-finder converge
+    to the overflow boundary instead of the root (the first release had that bug at kappa<=1.5)."""
     mb = mgf_b(theta, x, b1) - 1.0
-    phi0 = math.exp(lam * DELTA * mb)
-    phi1 = math.exp(kappa * lam * DELTA * mb)
+    g = np.array([lam * DELTA * mb, kappa * lam * DELTA * mb])
     P = np.array([[1 - p01, p01], [p10, 1 - p10]])
-    A = np.diag([phi0, phi1]) @ P
-    return float(max(abs(np.linalg.eigvals(A))))
+    A = np.diag(np.exp(g - g.max())) @ P
+    return float(g.max() + math.log(max(abs(np.linalg.eigvals(A)))))
 
 
 def decay_rate(lam: float, x: float, b1: float,
@@ -75,7 +77,7 @@ def decay_rate(lam: float, x: float, b1: float,
 
     def f(t):
         try:
-            return math.log(perron(t, lam, x, b1, kappa, p01, p10)) - t * B
+            return perron(t, lam, x, b1, kappa, p01, p10) - t * B
         except (OverflowError, ValueError):
             return float("inf")
 

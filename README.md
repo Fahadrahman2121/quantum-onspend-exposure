@@ -41,7 +41,11 @@ it, then post-quantum traffic (`Config.expired_last`). The first version served 
 first, expired ones included, which is optimal only while nothing has expired. And the
 un-migratable share can no longer use commit-reveal (`Config.legacy_commit_reveal`), since it
 runs no new protocol. A new policy, `ecdsa-ordered`, uses the ordering alone with no migration,
-and appears in every sweep where it separates the two levers. To reproduce the first submission:
+and appears in every sweep where it separates the two levers. Two more, `falcon-ordered` and `mldsa-ordered`,
+run blanket migration under the same ordering: they show that the harm blanket migration does to
+senders who cannot migrate belongs to arrival order, and that under deadline order the migrants are
+the ones not included. `calibration/effective_bandwidth.py` now solves for the decay rate in the log
+domain; the first release stopped at a float overflow for surge multipliers up to 1.5. To reproduce the first submission:
 
 ```bash
 python qsentry_sim.py --out results_published --seeds 30 --published
@@ -62,7 +66,7 @@ python qsentry_sim.py --out results_published --seeds 30 --published
 
 ## Experiments
 
-`results/results.csv` carries an `experiment` column. The suite runs 6,450 configurations
+`results/results.csv` carries an `experiment` column. The suite runs 6,750 configurations
 across 30 independent seeds on 4 worker processes. Every run lasts 1,100 blocks with a 100-block
 warm-up and no mempool reset; exposure is measured over the cohort broadcast after warm-up,
 counting a vulnerable transaction still pending at the end and older than T_b as at risk.
@@ -70,7 +74,7 @@ The nominal load is 32 tx/s between surges (mean 49.8 tx/s, 85% of ECDSA capacit
 
 | Experiment | Runs | What it varies |
 |---|---|---|
-| `congestion` | 750 | between-surge load 20-36 tx/s, the whole stable range, five policies including ECDSA with slack order |
+| `congestion` | 1050 | between-surge load 20-36 tx/s, the whole stable range, five policies including ECDSA with slack order |
 | `breaktime` | 750 | adversary break time `T_b` |
 | `legacy` | 600 | the share of demand that cannot migrate |
 | `provisioning` | 600 | block capacity |

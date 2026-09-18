@@ -147,4 +147,4 @@ The nominal 32 tx/s is a mean of 49.8 tx/s, 85% of the 58.7 tx/s ECDSA capacity.
 
 ---
 
-Generated from 6450 simulation runs across 15 experiments.
+Generated from 6750 simulation runs across 15 experiments.

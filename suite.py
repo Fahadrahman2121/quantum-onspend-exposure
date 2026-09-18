@@ -18,6 +18,8 @@ from qsentry_sim import POLICIES, Config, exposure_floor, simulate
 MAIN = ("ecdsa-only", "ecdsa-ordered", "falcon-only", "mldsa-only", "qsentry")
 # The baseline that separates the free lever from migration: ECDSA only, slack order.
 ORD = ("ecdsa-only", "ecdsa-ordered", "qsentry")
+# Blanket migration with and without the ordering: the paradox belongs to the class-blind order.
+PARADOX = MAIN + ("falcon-ordered", "mldsa-ordered")
 STYLE = {
     "ecdsa-only": ("#4d4d4d", "o", "ECDSA only"),
     "falcon-only": ("#74c476", "^", "FN-DSA only"),
@@ -27,6 +29,8 @@ STYLE = {
     "qsentry": ("#756bb1", "D", "QSentry"),
     "qsentry-no-vq": ("#d62728", "X", "QSentry, fixed weight"),
     "ecdsa-ordered": ("#1b9e77", "d", "ECDSA, slack order"),
+    "falcon-ordered": ("#238b45", "<", "FN-DSA, slack order"),
+    "mldsa-ordered": ("#b15928", ">", "ML-DSA, slack order"),
 }
 PDF = {"bbox_inches": "tight", "metadata": {"CreationDate": None}}
 
@@ -85,7 +89,7 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
         # 85% of the 58.7 tx/s ECDSA capacity.  Every sweep below keeps ECDSA stable;
         # overload is studied separately, and explicitly, in `horizon`.
         for rate in (20.0, 24.0, 28.0, 32.0, 36.0):
-            for p in MAIN:
+            for p in PARADOX:
                 _run(rows, "congestion", sr, policy=p, arrival_rate=rate)
 
         for tb in (15, 30, 60, 120, 240):
@@ -235,13 +239,13 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
 
     # Figure 1: the migration paradox under congestion
     fig, axes = plt.subplots(1, 3, figsize=(7.2, 2.4))
-    panel(axes[0], "congestion", "arrival_rate", "at_risk_fraction", MAIN,
+    panel(axes[0], "congestion", "arrival_rate", "at_risk_fraction", PARADOX,
           r"Between-surge load $\lambda_0$ (tx/s)", "At risk, all traffic")
-    panel(axes[1], "congestion", "arrival_rate", "at_risk_fraction_legacy", MAIN,
+    panel(axes[1], "congestion", "arrival_rate", "at_risk_fraction_legacy", PARADOX,
           r"Between-surge load $\lambda_0$ (tx/s)", "At risk, un-migratable")
-    panel(axes[2], "congestion", "arrival_rate", "inclusion_ratio", MAIN,
+    panel(axes[2], "congestion", "arrival_rate", "inclusion_ratio", PARADOX,
           r"Between-surge load $\lambda_0$ (tx/s)", "Inclusion ratio")
-    legend(axes[0], MAIN, loc="upper left")
+    legend(axes[0], PARADOX, loc="upper left", fontsize=5)
     fig.tight_layout()
     fig.savefig(out_dir / "paradox.pdf", **PDF)
     fig.savefig(out_dir / "paradox.png", dpi=220, bbox_inches="tight")

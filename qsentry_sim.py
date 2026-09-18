@@ -52,6 +52,8 @@ POLICIES = (
     "qsentry",          # proposed
     "qsentry-no-vq",    # ablation: fixed penalty weight instead of a virtual queue
     "ecdsa-ordered",    # no migration at all, slack ordering only: the free lever alone
+    "falcon-ordered",   # blanket migration to the compact credential, with slack ordering
+    "mldsa-ordered",    # blanket migration to the standard credential, with slack ordering
 )
 
 
@@ -169,6 +171,8 @@ def _feasible(policy: str, is_legacy: bool) -> tuple[str, ...]:
         "qsentry": CRED_NAMES,
         "qsentry-no-vq": CRED_NAMES,
         "ecdsa-ordered": ("ecdsa",),
+        "falcon-ordered": ("falcon",),
+        "mldsa-ordered": ("mldsa",),
     }[policy]
 
 
@@ -320,7 +324,8 @@ def simulate(config: Config, keep_trace: bool = False):
 
         # ---------------- block production ----------------
         if (slot + 1) % config.slots_per_block == 0:
-            if config.deadline_order and config.policy in ("qsentry", "qsentry-no-vq", "ecdsa-ordered") \
+            if config.deadline_order and config.policy in ("qsentry", "qsentry-no-vq", "ecdsa-ordered",
+                                                            "falcon-ordered", "mldsa-ordered") \
                     and len(mempool) > 1:
                 # Vulnerable transactions carry a deadline at the break time;
                 # post-quantum ones do not, so they yield.  This reordering
