@@ -45,7 +45,9 @@ and appears in every sweep where it separates the two levers. Two more, `falcon-
 run blanket migration under the same ordering: they show that the harm blanket migration does to
 senders who cannot migrate belongs to arrival order, and that under deadline order the migrants are
 the ones not included. `calibration/effective_bandwidth.py` now solves for the decay rate in the log
-domain; the first release stopped at a float overflow for surge multipliers up to 1.5. To reproduce the first submission:
+domain; the first release stopped at a float overflow for surge multipliers up to 1.5. A further baseline, `ecdsa-fee`, serves by
+fee in eight tiers, blind to the credential, which is what deployed builders do; and the break-time
+sweep now runs out to the nine-minute single-machine estimate of Babbush et al. To reproduce the first submission:
 
 ```bash
 python qsentry_sim.py --out results_published --seeds 30 --published
@@ -66,7 +68,7 @@ python qsentry_sim.py --out results_published --seeds 30 --published
 
 ## Experiments
 
-`results/results.csv` carries an `experiment` column. The suite runs 6,750 configurations
+`results/results.csv` carries an `experiment` column. The suite runs 7,230 configurations
 across 30 independent seeds on 4 worker processes. Every run lasts 1,100 blocks with a 100-block
 warm-up and no mempool reset; exposure is measured over the cohort broadcast after warm-up,
 counting a vulnerable transaction still pending at the end and older than T_b as at risk.
@@ -74,8 +76,8 @@ The nominal load is 32 tx/s between surges (mean 49.8 tx/s, 85% of ECDSA capacit
 
 | Experiment | Runs | What it varies |
 |---|---|---|
-| `congestion` | 1050 | between-surge load 20-36 tx/s, the whole stable range, five policies including ECDSA with slack order |
-| `breaktime` | 750 | adversary break time `T_b` |
+| `congestion` | 1200 | between-surge load 20-36 tx/s, the whole stable range, five policies including ECDSA with slack order |
+| `breaktime` | 1080 | adversary break time `T_b` |
 | `legacy` | 600 | the share of demand that cannot migrate |
 | `provisioning` | 600 | block capacity |
 | `flood` | 600 | an adversarial flood of vulnerable transactions, and a per-block reservation against it |

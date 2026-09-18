@@ -20,6 +20,8 @@ MAIN = ("ecdsa-only", "ecdsa-ordered", "falcon-only", "mldsa-only", "qsentry")
 ORD = ("ecdsa-only", "ecdsa-ordered", "qsentry")
 # Blanket migration with and without the ordering: the paradox belongs to the class-blind order.
 PARADOX = MAIN + ("falcon-ordered", "mldsa-ordered")
+# What deployed builders do: priority by fee, blind to the credential class.
+FEE = ("ecdsa-fee",)
 STYLE = {
     "ecdsa-only": ("#4d4d4d", "o", "ECDSA only"),
     "falcon-only": ("#74c476", "^", "FN-DSA only"),
@@ -31,6 +33,7 @@ STYLE = {
     "ecdsa-ordered": ("#1b9e77", "d", "ECDSA, slack order"),
     "falcon-ordered": ("#238b45", "<", "FN-DSA, slack order"),
     "mldsa-ordered": ("#b15928", ">", "ML-DSA, slack order"),
+    "ecdsa-fee": ("#1f78b4", "h", "ECDSA, fee order"),
 }
 PDF = {"bbox_inches": "tight", "metadata": {"CreationDate": None}}
 
@@ -89,11 +92,11 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
         # 85% of the 58.7 tx/s ECDSA capacity.  Every sweep below keeps ECDSA stable;
         # overload is studied separately, and explicitly, in `horizon`.
         for rate in (20.0, 24.0, 28.0, 32.0, 36.0):
-            for p in PARADOX:
+            for p in PARADOX + FEE:
                 _run(rows, "congestion", sr, policy=p, arrival_rate=rate)
 
-        for tb in (15, 30, 60, 120, 240):
-            for p in MAIN:
+        for tb in (15, 30, 60, 120, 240, 540):
+            for p in MAIN + FEE:
                 _run(rows, "breaktime", sr, policy=p, break_time_s=tb)
 
         # Chain type.  Block capacity is held per unit time so that only the

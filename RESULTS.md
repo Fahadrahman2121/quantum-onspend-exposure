@@ -46,6 +46,7 @@ The nominal 32 tx/s is a mean of 49.8 tx/s, 85% of the 58.7 tx/s ECDSA capacity.
 | break time 60 s: un-migr ECDSA / ECDSA ordered / QSentry | 0.5011 / 0.1149 / 0.1107 |
 | break time 120 s: un-migr ECDSA / ECDSA ordered / QSentry | 0.2987 / 0.0570 / 0.0555 |
 | break time 240 s: un-migr ECDSA / ECDSA ordered / QSentry | 0.1167 / 0.0184 / 0.0183 |
+| break time 540 s: un-migr ECDSA / ECDSA ordered / QSentry | 0.0131 / 0.0023 / 0.0023 |
 | phi 0.05/0.15/0.30/0.50/0.80, un-migr at risk, ecdsa-only | 0.5096 / 0.5163 / 0.5011 / 0.5105 / 0.5188 |
 | phi 0.05/0.15/0.30/0.50/0.80, un-migr at risk, ecdsa-ordered | 0.1135 / 0.1161 / 0.1149 / 0.1174 / 0.1226 |
 | phi 0.05/0.15/0.30/0.50/0.80, un-migr at risk, falcon-only | 1.0000 / 1.0000 / 1.0000 / 1.0000 / 1.0000 |
@@ -147,4 +148,4 @@ The nominal 32 tx/s is a mean of 49.8 tx/s, 85% of the 58.7 tx/s ECDSA capacity.
 
 ---
 
-Generated from 6750 simulation runs across 15 experiments.
+Generated from 7230 simulation runs across 15 experiments.

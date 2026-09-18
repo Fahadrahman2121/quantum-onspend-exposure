@@ -42,6 +42,7 @@ CREDENTIALS = {
     "hybrid": {"sig": 72 + 2420, "pk": 33 + 1312, "verify_rel": 1.70, "vulnerable": False},
 }
 CRED_NAMES = tuple(CREDENTIALS)
+FEE_TIERS = 8   # discretisation of i.i.d. fees for the fee-priority baseline
 
 POLICIES = (
     "ecdsa-only",       # status quo
@@ -54,6 +55,7 @@ POLICIES = (
     "ecdsa-ordered",    # no migration at all, slack ordering only: the free lever alone
     "falcon-ordered",   # blanket migration to the compact credential, with slack ordering
     "mldsa-ordered",    # blanket migration to the standard credential, with slack ordering
+    "ecdsa-fee",        # no migration, class-blind fee priority: what deployed builders do
 )
 
 
@@ -173,6 +175,7 @@ def _feasible(policy: str, is_legacy: bool) -> tuple[str, ...]:
         "ecdsa-ordered": ("ecdsa",),
         "falcon-ordered": ("falcon",),
         "mldsa-ordered": ("mldsa",),
+        "ecdsa-fee": ("ecdsa",),
     }[policy]
 
 
@@ -299,6 +302,17 @@ def simulate(config: Config, keep_trace: bool = False):
                 if not CREDENTIALS[cred]["vulnerable"]:
                     extra_bytes += count * (per_tx - tx_bytes("ecdsa", payload))
                 lg = 1 if is_legacy else 0
+                if config.policy == "ecdsa-fee":
+                    # i.i.d. fees, independent of credential class, discretised into tiers.
+                    # The tier rides in the high bits of the legacy flag (bit 0).
+                    for tier, c_t in enumerate(rng.multinomial(count, [1.0 / FEE_TIERS] * FEE_TIERS)):
+                        if c_t > 0:
+                            mempool.append([now, int(c_t), CRED_NAMES.index(cred), per_tx, 0, now, lg + 2 * tier])
+                    pending_bytes += count * per_tx
+                    pending_tx += count
+                    if measuring:
+                        cred_counts[CRED_NAMES.index(cred)] += count
+                    continue
                 if conceals:
                     mempool.append([now, count, CRED_NAMES.index(cred), config.commit_bytes, 2, now, lg])
                     pending_bytes += count * config.commit_bytes
@@ -403,6 +417,9 @@ def simulate(config: Config, keep_trace: bool = False):
                 else:
                     vulnerable.extend(other)
                     ordered = vulnerable
+            elif config.policy == "ecdsa-fee" and len(mempool) > 1:
+                # Highest fee tier first, broadcast order within a tier (the sort is stable).
+                ordered = deque(sorted(mempool, key=lambda e: -(e[6] >> 1)))
             else:
                 ordered = mempool
             budget = config.block_bytes
@@ -479,7 +496,7 @@ def simulate(config: Config, keep_trace: bool = False):
                         hist_legacy[idx] += take
                         if risky:
                             at_risk_legacy += take
-                        if lg:
+                        if lg & 1:
                             included_unmig += take
                             window_sum_unmig += window * take
                             hist_unmig[idx] += take
@@ -526,7 +543,7 @@ def simulate(config: Config, keep_trace: bool = False):
             pend_measured += int(e[1])
             if CREDENTIALS[CRED_NAMES[e[2]]]["vulnerable"] and end_t - e[0] > config.break_time_s:
                 pend_vuln_old += int(e[1])
-                if e[6]:
+                if e[6] & 1:
                     pend_unmig_old += int(e[1])
     measured_s = (config.duration_blocks - config.warmup_blocks) * config.block_interval_s
     total_cred = max(cred_counts.sum(), 1)
