@@ -33,6 +33,28 @@ python verify.py
 `results/manifest.json`, re-derives each quoted figure from `results/summary.csv`, and
 exits non-zero on any mismatch. Use `--numbers-only` to skip the rerun.
 
+## Corrections of 19 September 2026
+
+An independent review of the artifact found three things that touched reported numbers; all are
+fixed and every experiment was re-run. (1) The un-migratable and the other vulnerable transactions
+of a slot were queued as two cohorts, the un-migratable one always first, which favoured the headline
+metric whenever a block cut a slot. They are now one cohort, and a block that cuts it takes a
+hypergeometric share (`split_nl`); the two at-risk metrics now agree. (2) The expired class was served
+most recently expired first, because the mempool keeps the order it was last served in; it is now
+served oldest first, as the paper states (`Config.expired_order`, with `"newest"` kept for
+comparison). The at-risk fraction does not change; the tail does. (3) Block filling stops at the
+first entry that does not fit; this is now documented, and `Config.backfill` is there to check it.
+
+New in the model: fee tiers on every transaction with four fee laws (`fee_tiers`, `fee_model`), the
+value of each block against what fee order would have built (`block_value_ratio`), a revenue-neutral
+hybrid (`ecdsa-feetriage`: fee order between tiers, triage inside a tier), a flood that pays the top
+fee (`attack_fee`), a builder that assumes the wrong break time (`builder_break_time_s`), and partial
+adoption (`adopt_share`): non-adopting builders order by fee and include the forgery of every
+vulnerable spend pending past T_b, which is counted as lost, and each run reports the loss both when
+adopters apply a first-seen rule (`lost_fraction_*`) and when they keep replacement
+(`lost_fraction_norule_*`). Windows are also reported at the 99th percentile, at their maximum, and
+with transactions still pending at the end counted at their age.
+
 ## Corrections of 18 September 2026
 
 The defaults carry two corrections found in review. Slack ordering now triages: it serves
@@ -58,7 +80,7 @@ python qsentry_sim.py --out results_published --seeds 30 --published
 | File | Contents |
 |---|---|
 | `qsentry_sim.py` | the model: credentials, mempool, block production, exposure accounting, and the closed-form exposure floor |
-| `suite.py` | fifteen experiments, five figures, paired statistical tests, and the manifest |
+| `suite.py` | eighteen experiments, six figures, paired statistical tests, and the manifest |
 | `verify.py` | independent verification of both reproduction and the reported numbers |
 | `results/` | committed outputs, including a SHA-256 for every file |
 | `RESULTS.md` | every claim in the paper mapped to the exact number in the data |
@@ -68,7 +90,7 @@ python qsentry_sim.py --out results_published --seeds 30 --published
 
 ## Experiments
 
-`results/results.csv` carries an `experiment` column. The suite runs 7,230 configurations
+`results/results.csv` carries an `experiment` column. The suite runs 10,590 configurations
 across 30 independent seeds on 4 worker processes. Every run lasts 1,100 blocks with a 100-block
 warm-up and no mempool reset; exposure is measured over the cohort broadcast after warm-up,
 counting a vulnerable transaction still pending at the end and older than T_b as at risk.
@@ -76,19 +98,22 @@ The nominal load is 32 tx/s between surges (mean 49.8 tx/s, 85% of ECDSA capacit
 
 | Experiment | Runs | What it varies |
 |---|---|---|
-| `congestion` | 1200 | between-surge load 20-36 tx/s, the whole stable range, five policies including ECDSA with slack order |
+| `adoption` | 1350 | partial adoption: share of blocks built by adopters, five adopter orders, loss with a first-seen rule and with replacement kept |
+| `congestion` | 1200 | between-surge load 20-36 tx/s, the whole stable range, arrival order, fee order, triage order, blanket migrations with and without triage, QSentry |
 | `breaktime` | 1080 | adversary break time `T_b` |
-| `legacy` | 600 | the share of demand that cannot migrate |
-| `provisioning` | 600 | block capacity |
-| `flood` | 600 | an adversarial flood of vulnerable transactions, and a per-block reservation against it |
-| `chain` | 540 | block interval, isolating the theoretical floor |
-| `conceal` | 480 | concealment by commit-reveal for migratable senders, alone and composed with slack ordering, plus probes |
-| `burstiness-mean38` | 360 | demand surge multiplier with the long-run mean load held at 38 tx/s |
-| `burstiness-mean30` | 360 | demand surge multiplier with the long-run mean load held at 30 tx/s |
+| `flood` | 840 | an adversarial flood of vulnerable transactions, a per-block reservation against it, and the same flood against fee order paying like everyone or the top fee |
+| `legacy` | 750 | the share of demand that cannot migrate |
+| `provisioning` | 750 | block capacity |
+| `chain` | 720 | block interval, isolating the theoretical floor |
+| `feemodel` | 540 | six fee models (2, 8, 64 independent tiers; surge senders bid high or low; bids follow the queue) for fee order, the tier hybrid and triage, with block value |
+| `burstiness-mean38` | 480 | demand surge multiplier with the long-run mean load held at 38 tx/s |
+| `burstiness-mean30` | 480 | demand surge multiplier with the long-run mean load held at 30 tx/s |
+| `conceal` | 480 | concealment by commit-reveal for migratable senders, alone and composed with triage ordering, plus probes |
+| `tb-misset` | 420 | a builder that sorts by a wrong break time while exposure is counted against the true 60 s |
 | `epsilon` | 300 | the exposure target |
 | `aging` | 300 | bounded deferral for post-quantum transactions (tested and rejected) |
-| `ablation` | 240 | mechanism ablations: no budget, no ordering, fixed weight, oldest-first ordering, ordering alone |
-| `horizon` | 240 | run length 200/1000/5000 blocks on a stable (32 tx/s) and an overloaded (38 tx/s) chain, 10 seeds |
+| `horizon` | 300 | run length 200/1000/5000 blocks on a stable (32 tx/s) and an overloaded (38 tx/s) chain, 10 seeds |
+| `ablation` | 270 | mechanism ablations: no budget, no ordering, fixed weight, oldest-first ordering, ordering alone |
 | `verify` | 180 | verification budget (sensitivity check) |
 | `v-sweep` | 150 | the cost-exposure weight `V` |
 

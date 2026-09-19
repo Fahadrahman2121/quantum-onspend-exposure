@@ -10,7 +10,7 @@ readme = HERE / "README.md"
 t = readme.read_text(encoding="utf-8")
 
 WHAT = {
-    "congestion": "between-surge load 20-36 tx/s, the whole stable range, five policies including ECDSA with slack order",
+    "congestion": "between-surge load 20-36 tx/s, the whole stable range, arrival order, fee order, triage order, blanket migrations with and without triage, QSentry",
     "breaktime": "adversary break time `T_b`",
     "legacy": "the share of demand that cannot migrate",
     "provisioning": "block capacity",
@@ -21,9 +21,12 @@ WHAT = {
     "ablation": "mechanism ablations: no budget, no ordering, fixed weight, oldest-first ordering, ordering alone",
     "v-sweep": "the cost-exposure weight `V`",
     "verify": "verification budget (sensitivity check)",
-    "flood": "an adversarial flood of vulnerable transactions, and a per-block reservation against it",
+    "flood": "an adversarial flood of vulnerable transactions, a per-block reservation against it, and the same flood against fee order paying like everyone or the top fee",
     "aging": "bounded deferral for post-quantum transactions (tested and rejected)",
-    "conceal": "concealment by commit-reveal for migratable senders, alone and composed with slack ordering, plus probes",
+    "conceal": "concealment by commit-reveal for migratable senders, alone and composed with triage ordering, plus probes",
+    "adoption": "partial adoption: share of blocks built by adopters, five adopter orders, loss with a first-seen rule and with replacement kept",
+    "feemodel": "six fee models (2, 8, 64 independent tiers; surge senders bid high or low; bids follow the queue) for fee order, the tier hybrid and triage, with block value",
+    "tb-misset": "a builder that sorts by a wrong break time while exposure is counted against the true 60 s",
     "horizon": "run length 200/1000/5000 blocks on a stable (32 tx/s) and an overloaded (38 tx/s) chain, 10 seeds",
 }
 rows = "\n".join("| `%s` | %d | %s |" % (e, counts[e], WHAT[e]) for e in counts.sort_values(ascending=False).index)
@@ -34,7 +37,7 @@ t = re.sub(r"The suite runs [\d,]+ configurations", "The suite runs {:,} configu
 t = t.replace("python qsentry_sim.py --out results --seeds 30      # ~10 minutes",
               "python qsentry_sim.py --out results --seeds 30      # about an hour")
 t = t.replace("| `suite.py` | fifteen experiments, five figures,", "| `suite.py` | %s experiments, five figures," %
-              {15: "fifteen", 16: "sixteen"}[counts.size])
+              {15: "fifteen", 16: "sixteen", 17: "seventeen", 18: "eighteen"}[counts.size])
 NOTE = """## Corrections of 18 September 2026
 
 The defaults carry two corrections found in review. Slack ordering now triages: it serves

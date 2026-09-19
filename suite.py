@@ -30,10 +30,11 @@ STYLE = {
     "fee-optimal": ("#3182bd", "P", "block-space optimal"),
     "qsentry": ("#756bb1", "D", "QSentry"),
     "qsentry-no-vq": ("#d62728", "X", "QSentry, fixed weight"),
-    "ecdsa-ordered": ("#1b9e77", "d", "ECDSA, slack order"),
-    "falcon-ordered": ("#238b45", "<", "FN-DSA, slack order"),
-    "mldsa-ordered": ("#b15928", ">", "ML-DSA, slack order"),
+    "ecdsa-ordered": ("#1b9e77", "d", "ECDSA, triage order"),
+    "falcon-ordered": ("#238b45", "<", "FN-DSA, triage order"),
+    "mldsa-ordered": ("#b15928", ">", "ML-DSA, triage order"),
     "ecdsa-fee": ("#1f78b4", "h", "ECDSA, fee order"),
+    "ecdsa-feetriage": ("#a6611a", "*", "ECDSA, fee order, triage in tier"),
 }
 PDF = {"bbox_inches": "tight", "metadata": {"CreationDate": None}}
 
@@ -102,12 +103,12 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
         # Chain type.  Block capacity is held per unit time so that only the
         # interval changes, isolating the residual-block-time floor.
         for interval in (2.0, 6.0, 12.0, 60.0, 150.0, 600.0):
-            for p in ORD:
+            for p in ORD + FEE:
                 _run(rows, "chain", sr, policy=p, block_interval_s=interval,
                      block_bytes=250_000.0 * interval / 12.0)
 
         for phi in (0.05, 0.15, 0.30, 0.50, 0.80):
-            for p in ("ecdsa-only", "ecdsa-ordered", "falcon-only", "qsentry"):
+            for p in ("ecdsa-only", "ecdsa-ordered", "falcon-only", "qsentry") + FEE:
                 _run(rows, "legacy", sr, policy=p, legacy_fraction=phi)
 
         # Ablation at the nominal load: what each mechanism contributes, including
@@ -119,6 +120,8 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
         _run(rows, "ablation", sr, policy="ecdsa-ordered")
         # The ordering of the first submission: oldest first, expired included.
         _run(rows, "ablation", sr, policy="qsentry", expired_last=False)
+        # The expired class served most recently expired first, instead of oldest first.
+        _run(rows, "ablation", sr, policy="ecdsa-ordered", expired_order="newest")
 
         for v in (1.0, 4.0, 8.0, 20.0, 60.0):
             _run(rows, "v-sweep", sr, policy="qsentry", control_v=v)
@@ -129,7 +132,7 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
 
         # Provisioning: how much block space does each policy need?
         for bb in (150_000.0, 250_000.0, 400_000.0, 600_000.0, 900_000.0):
-            for p in ("ecdsa-only", "ecdsa-ordered", "falcon-only", "qsentry"):
+            for p in ("ecdsa-only", "ecdsa-ordered", "falcon-only", "qsentry") + FEE:
                 _run(rows, "provisioning", sr, policy=p, block_bytes=bb)
 
         # Burstiness at FIXED MEAN load: the between-surge rate is scaled so that the
@@ -140,7 +143,7 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
         for mean in (38.0, 30.0):
             for sm in (1.0, 2.0, 4.0, 6.0):
                 base = mean / (1.0 + pi_surge * (sm - 1.0))
-                for p in ORD:
+                for p in ORD + FEE:
                     _run(rows, "burstiness-mean%d" % int(mean), sr, policy=p,
                          arrival_rate=base, surge_multiplier=sm)
 
@@ -158,6 +161,11 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
                      attack_rate=atk, vulnerable_cap=cap)
             for p in ("ecdsa-only", "ecdsa-ordered"):
                 _run(rows, "flood", sr, policy=p, arrival_rate=26.0, attack_rate=atk)
+            # Fee order under the same flood, paying like everybody else and paying
+            # the top fee: the flood that buys the front of a fee-ordered queue.
+            for fee in ("iid", "top"):
+                _run(rows, "flood", sr, policy="ecdsa-fee", arrival_rate=26.0,
+                     attack_rate=atk, attack_fee=fee)
 
         # Bounded deferral for post-quantum transactions.
         for rate in (32.0, 26.0):
@@ -191,6 +199,41 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
                 _run(rows, "horizon", hr, policy="qsentry", arrival_rate=rate,
                      duration_blocks=100 + mb, migration_budget=False)
 
+        # Fee order in the horizon experiment as well.
+        for mb in (200, 1000, 5000):
+            for rate in (32.0, 38.0):
+                _run(rows, "horizon", hr, policy="ecdsa-fee", arrival_rate=rate,
+                     duration_blocks=100 + mb)
+
+        # A builder that assumes the wrong break time.  The deadline it sorts by is
+        # builder_break_time_s; exposure is always counted against the true 60 s.
+        for tb_hat in (15.0, 30.0, 45.0, 60.0, 90.0, 120.0, 240.0):
+            for p in ("ecdsa-ordered", "qsentry"):
+                _run(rows, "tb-misset", sr, policy=p, builder_break_time_s=tb_hat)
+
+        # How much of the fee-order result is the fee model.  Tier count for i.i.d.
+        # fees, and three laws in which the fee depends on the state of demand.
+        # Triage runs with the same fees so that the block value it gives up is priced.
+        for model, nt in (("iid", 2), ("iid", 8), ("iid", 64),
+                          ("surge-high", 8), ("surge-low", 8), ("drain", 8)):
+            for p in ("ecdsa-fee", "ecdsa-feetriage", "ecdsa-ordered"):
+                _run(rows, "feemodel", sr, policy=p, fee_tiers=nt, fee_model=model)
+
+        # Partial adoption.  A share `a` of blocks is built by adopters, the rest by
+        # fee-ordering builders at which a forgery that exists wins.  One run gives
+        # the loss under both rules at the adopters: with a first-seen rule
+        # (lost_fraction_*) and with replacement kept (lost_fraction_norule_*).
+        for a in (0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0):
+            for kw in (dict(policy="ecdsa-ordered"),
+                       dict(policy="ecdsa-ordered", expired_last=False),
+                       dict(policy="ecdsa-only"),
+                       dict(policy="ecdsa-fee"),
+                       dict(policy="ecdsa-feetriage")):
+                _run(rows, "adoption", sr, adopt_share=a, fee_tiers=8, **kw)
+        for a in (0.0, 0.25, 0.5, 0.75, 1.0):
+            for kw in (dict(policy="ecdsa-ordered"), dict(policy="ecdsa-only")):
+                _run(rows, "adoption", sr, adopt_share=a, fee_tiers=8, arrival_rate=24.0, **kw)
+
         if overrides:
             rows = [(e, s, {**overrides, **kw}) for e, s, kw in rows]
 
@@ -209,13 +252,19 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
                "inclusion_ratio_pq", "attacker_included_tps", "attacker_block_share",
                "latency_mean_s", "commit_bytes_per_tx",
                "at_risk_fraction_vuln", "window_vuln_mean_s", "window_vuln_p95_s",
-               "pending_measured_end"]
+               "pending_measured_end", "window_vuln_p99_s", "window_vuln_max_s",
+               "window_vuln_p95_cens_s", "window_vuln_p99_cens_s",
+               "lost_fraction_vuln", "lost_fraction_legacy",
+               "lost_fraction_norule_vuln", "lost_fraction_norule_legacy",
+               "adopter_block_share", "block_value_ratio"]
     group = ["experiment", "policy", "arrival_rate", "break_time_s",
              "block_interval_s", "legacy_fraction", "control_v",
              "verify_budget_per_block", "block_bytes", "surge_multiplier",
              "exposure_target", "attack_rate", "vulnerable_cap", "pq_max_wait",
              "commit_reveal", "commit_bytes", "migration_budget", "deadline_order",
-             "duration_blocks", "expired_last", "legacy_commit_reveal"]
+             "duration_blocks", "expired_last", "legacy_commit_reveal",
+             "expired_order", "backfill", "builder_break_time_s", "fee_tiers",
+             "fee_model", "attack_fee", "adopt_share"]
     summary = data.groupby(group, dropna=False)[metrics].agg(["mean", ci95]).reset_index()
     summary.columns = ["_".join(str(x) for x in c if x).rstrip("_") for c in summary.columns]
     if not figures_only:   # a CSV round-trip would alter float formatting
@@ -351,6 +400,42 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
     fig.savefig(out_dir / "trace.png", dpi=220, bbox_inches="tight")
     plt.close(fig)
 
+    # Figure 6: partial adoption, loss to an adversary that forges every expired spend
+    ad = data[(data.experiment == "adoption") & (data.arrival_rate == 32.0)]
+    if not ad.empty:
+        el_ = ad.expired_last.astype(bool)
+        series = [
+            ("triage, replacement kept", (ad.policy == "ecdsa-ordered") & el_,
+             "lost_fraction_norule_vuln", "#1b9e77", "d", "-"),
+            ("arrival order, replacement kept", ad.policy == "ecdsa-only",
+             "lost_fraction_norule_vuln", "#4d4d4d", "o", "-"),
+            ("triage + first-seen rule", (ad.policy == "ecdsa-ordered") & el_,
+             "lost_fraction_vuln", "#1b9e77", "d", "--"),
+            ("arrival order + first-seen rule", ad.policy == "ecdsa-only",
+             "lost_fraction_vuln", "#4d4d4d", "o", "--"),
+            ("fee order + first-seen rule", ad.policy == "ecdsa-fee",
+             "lost_fraction_vuln", "#1f78b4", "h", "--"),
+        ]
+        fig, ax = plt.subplots(figsize=(3.6, 2.3))
+        handles = []
+        for lab, mask, metric, col, mk, ls in series:
+            g = ad[mask].groupby("adopt_share")[metric]
+            x = np.array(sorted(ad[mask].adopt_share.unique()))
+            ax.errorbar(x, g.mean().reindex(x), yerr=g.apply(ci95).reindex(x), color=col, marker=mk,
+                        markersize=4, linestyle=ls, linewidth=1.2, capsize=2, elinewidth=0.7)
+            handles.append(Line2D([], [], color=col, marker=mk, markersize=4, linestyle=ls,
+                                  linewidth=1.2, label=lab))
+        ax.set(xlabel="Share of blocks built by adopters", ylabel="Vulnerable transactions lost")
+        ax.grid(alpha=0.25)
+        ax.tick_params(labelsize=6)
+        ax.xaxis.label.set_size(6.5)
+        ax.yaxis.label.set_size(6.5)
+        ax.legend(handles=handles, fontsize=5, frameon=False, loc="lower left")
+        fig.tight_layout(pad=0.4)
+        fig.savefig(out_dir / "adoption.pdf", **PDF)
+        fig.savefig(out_dir / "adoption.png", dpi=220, bbox_inches="tight")
+        plt.close(fig)
+
     abl = data[data.experiment == "ablation"]
     mb = abl.migration_budget.astype(bool)
     do = abl.deadline_order.astype(bool)
@@ -362,14 +447,15 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
                 "hybrid-only": abl.policy == "hybrid-only",
                 "qsentry-no-budget": (abl.policy == "qsentry") & ~mb,
                 "qsentry-no-ordering": (abl.policy == "qsentry") & ~do,
-                "ecdsa-ordered": abl.policy == "ecdsa-ordered",
+                "ecdsa-ordered": (abl.policy == "ecdsa-ordered") & (abl.expired_order == "oldest"),
+                "ecdsa-ordered-newest": (abl.policy == "ecdsa-ordered") & (abl.expired_order == "newest"),
                 "qsentry-oldest-first": (abl.policy == "qsentry") & ~el}
     for other, mask in variants.items():
         rhs = abl[mask].sort_values("seed")
         if rhs.empty:
             continue
         for metric in ("at_risk_fraction_legacy", "at_risk_fraction_vuln", "at_risk_fraction", "bytes_per_tx",
-                       "window_vuln_p95_s"):
+                       "window_vuln_p95_s", "window_vuln_p99_s"):
             a, b = base[metric].to_numpy(), rhs[metric].to_numpy()
             if np.allclose(a, b):
                 w, pv = float("nan"), 1.0
