@@ -13,10 +13,10 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from qsentry_sim import POLICIES, Config, exposure_floor, simulate
+from qsentry_sim import ADV_ALPHAS, ADV_KS, POLICIES, Config, exposure_floor, simulate
 
 MAIN = ("ecdsa-only", "ecdsa-ordered", "falcon-only", "mldsa-only", "qsentry")
-# The baseline that separates the free lever from migration: ECDSA only, slack order.
+# The baseline that separates the ordering lever from migration: ECDSA only, triage order.
 ORD = ("ecdsa-only", "ecdsa-ordered", "qsentry")
 # Blanket migration with and without the ordering: the paradox belongs to the class-blind order.
 PARADOX = MAIN + ("falcon-ordered", "mldsa-ordered")
@@ -210,12 +210,17 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
         for tb_hat in (15.0, 30.0, 45.0, 60.0, 90.0, 120.0, 240.0):
             for p in ("ecdsa-ordered", "qsentry"):
                 _run(rows, "tb-misset", sr, policy=p, builder_break_time_s=tb_hat)
+        # The reverse error: the real adversary is slower than the 60 s the builder
+        # sorts by.  The correctly set order and the other orders are in `breaktime`.
+        for tb_true in (120.0, 240.0, 540.0):
+            _run(rows, "tb-misset", sr, policy="ecdsa-ordered", break_time_s=tb_true,
+                 builder_break_time_s=60.0)
 
         # How much of the fee-order result is the fee model.  Tier count for i.i.d.
         # fees, and three laws in which the fee depends on the state of demand.
         # Triage runs with the same fees so that the block value it gives up is priced.
         for model, nt in (("iid", 2), ("iid", 8), ("iid", 64),
-                          ("surge-high", 8), ("surge-low", 8), ("drain", 8)):
+                          ("surge-high", 8), ("surge-low", 8), ("drain", 8), ("bump", 8)):
             for p in ("ecdsa-fee", "ecdsa-feetriage", "ecdsa-ordered"):
                 _run(rows, "feemodel", sr, policy=p, fee_tiers=nt, fee_model=model)
 
@@ -225,14 +230,29 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
         # (lost_fraction_*) and with replacement kept (lost_fraction_norule_*).
         for a in (0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0):
             for kw in (dict(policy="ecdsa-ordered"),
-                       dict(policy="ecdsa-ordered", expired_last=False),
                        dict(policy="ecdsa-only"),
                        dict(policy="ecdsa-fee"),
-                       dict(policy="ecdsa-feetriage")):
+                       dict(policy="ecdsa-feetriage"),
+                       # the hybrid with replacement kept: the forgery pays the top fee
+                       dict(policy="ecdsa-feetriage", forger_fee=True)):
                 _run(rows, "adoption", sr, adopt_share=a, fee_tiers=8, **kw)
         for a in (0.0, 0.25, 0.5, 0.75, 1.0):
             for kw in (dict(policy="ecdsa-ordered"), dict(policy="ecdsa-only")):
                 _run(rows, "adoption", sr, adopt_share=a, fee_tiers=8, arrival_rate=24.0, **kw)
+
+        # Block value decides who builds: the adopter wins a block in proportion to
+        # its nominal share times the value of the block its order would build.
+        for a in (0.25, 0.5, 0.75):
+            for mode in ("first-seen", "inherit"):
+                for p in ("ecdsa-ordered", "ecdsa-only"):
+                    _run(rows, "adoption-value", sr, policy=p, adopt_share=a, fee_tiers=8,
+                         adopt_by_value=mode)
+
+        # A capacity-limited adversary: k machines, targets chosen by value with
+        # knowledge of the future.  Post-processing on the honest queue.
+        for rate in (24.0, 32.0):
+            for p in ("ecdsa-only", "ecdsa-fee", "ecdsa-ordered"):
+                _run(rows, "adversary", sr, policy=p, arrival_rate=rate, adversary=True)
 
         if overrides:
             rows = [(e, s, {**overrides, **kw}) for e, s, kw in rows]
@@ -256,7 +276,9 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
                "window_vuln_p95_cens_s", "window_vuln_p99_cens_s",
                "lost_fraction_vuln", "lost_fraction_legacy",
                "lost_fraction_norule_vuln", "lost_fraction_norule_legacy",
-               "adopter_block_share", "block_value_ratio"]
+               "adopter_block_share", "block_value_ratio", "block_value_ratio_geo",
+               "adv_feasible"] + ["adv_count_k%d" % k for k in ADV_KS] \
+              + ["adv_value%d_k%d" % (round(al * 100), k) for al in ADV_ALPHAS for k in ADV_KS]
     group = ["experiment", "policy", "arrival_rate", "break_time_s",
              "block_interval_s", "legacy_fraction", "control_v",
              "verify_budget_per_block", "block_bytes", "surge_multiplier",
@@ -264,7 +286,8 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
              "commit_reveal", "commit_bytes", "migration_budget", "deadline_order",
              "duration_blocks", "expired_last", "legacy_commit_reveal",
              "expired_order", "backfill", "builder_break_time_s", "fee_tiers",
-             "fee_model", "attack_fee", "adopt_share"]
+             "fee_model", "attack_fee", "adopt_share", "adopt_by_value", "forger_fee",
+             "adversary"]
     summary = data.groupby(group, dropna=False)[metrics].agg(["mean", ci95]).reset_index()
     summary.columns = ["_".join(str(x) for x in c if x).rstrip("_") for c in summary.columns]
     if not figures_only:   # a CSV round-trip would alter float formatting
@@ -291,13 +314,13 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
 
     # Figure 1: the migration paradox under congestion
     fig, axes = plt.subplots(1, 3, figsize=(7.2, 2.4))
-    panel(axes[0], "congestion", "arrival_rate", "at_risk_fraction", PARADOX,
+    panel(axes[0], "congestion", "arrival_rate", "at_risk_fraction", PARADOX + FEE,
           r"Between-surge load $\lambda_0$ (tx/s)", "At risk, all traffic")
-    panel(axes[1], "congestion", "arrival_rate", "at_risk_fraction_legacy", PARADOX,
+    panel(axes[1], "congestion", "arrival_rate", "at_risk_fraction_legacy", PARADOX + FEE,
           r"Between-surge load $\lambda_0$ (tx/s)", "At risk, un-migratable")
-    panel(axes[2], "congestion", "arrival_rate", "inclusion_ratio", PARADOX,
+    panel(axes[2], "congestion", "arrival_rate", "inclusion_ratio", PARADOX + FEE,
           r"Between-surge load $\lambda_0$ (tx/s)", "Inclusion ratio")
-    legend(axes[0], PARADOX, loc="upper left", fontsize=5)
+    legend(axes[2], PARADOX + FEE, loc="lower left", fontsize=5)
     fig.tight_layout()
     fig.savefig(out_dir / "paradox.pdf", **PDF)
     fig.savefig(out_dir / "paradox.png", dpi=220, bbox_inches="tight")
@@ -305,16 +328,16 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
 
     # Figure 2: adversary capability and chain type, against the theoretical floor
     fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.6))
-    panel(axes[0], "breaktime", "break_time_s", "at_risk_fraction_legacy", MAIN,
+    panel(axes[0], "breaktime", "break_time_s", "at_risk_fraction_legacy", MAIN + FEE,
           r"Break time $T_b$ (s)", "At risk, un-migratable")
     panel(axes[1], "chain", "block_interval_s", "at_risk_fraction_legacy",
-          ORD, r"Block interval $\Delta$ (s)",
+          ORD + FEE, r"Block interval $\Delta$ (s)",
           "At risk, un-migratable", logx=True)
     xs = np.logspace(np.log10(2.0), np.log10(600.0), 100)
     axes[1].plot(xs, [exposure_floor(60.0, x) for x in xs], color="#d62728",
                  linestyle="--", linewidth=1.2, label="_nolegend_")
-    legend(axes[0], MAIN, loc="lower left")
-    legend(axes[1], ORD,
+    legend(axes[0], MAIN + FEE, loc="upper right")
+    legend(axes[1], ORD + FEE,
            extra=[Line2D([], [], color="#d62728", linestyle="--", linewidth=1.2,
                          label=r"floor $1-T_b/\Delta$")], loc="upper left")
     fig.tight_layout()
@@ -325,7 +348,7 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
     # Figure 3: migration progress and the cost-exposure tradeoff
     fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.6))
     panel(axes[0], "legacy", "legacy_fraction", "at_risk_fraction_legacy",
-          ("ecdsa-only", "falcon-only", "qsentry"),
+          ("ecdsa-only", "ecdsa-fee", "ecdsa-ordered", "falcon-only", "qsentry"),
           r"Un-migratable share $\varphi$", "At risk, un-migratable")
     v = data[data.experiment == "v-sweep"].groupby("control_v")
     vm = v[["bytes_per_tx", "at_risk_fraction_legacy"]].mean()
@@ -336,7 +359,8 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
     axes[1].set(xlabel="Block space per transaction (bytes)",
                 ylabel="At risk, un-migratable")
     axes[1].grid(alpha=0.25)
-    legend(axes[0], ("ecdsa-only", "falcon-only", "qsentry"))
+    legend(axes[0], ("ecdsa-only", "ecdsa-fee", "ecdsa-ordered", "falcon-only", "qsentry"),
+           loc="center right", fontsize=5.5)
     fig.tight_layout()
     fig.savefig(out_dir / "migration.pdf", **PDF)
     fig.savefig(out_dir / "migration.png", dpi=220, bbox_inches="tight")
@@ -346,17 +370,18 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
     # figure is drawn small with the same font sizes the wide figures use.
     fig, axes = plt.subplots(1, 2, figsize=(3.6, 1.7))
     panel(axes[0], "provisioning", "block_bytes", "at_risk_fraction_legacy",
-          ("ecdsa-only", "ecdsa-ordered", "falcon-only", "qsentry"),
+          ("ecdsa-only", "ecdsa-fee", "ecdsa-ordered", "falcon-only", "qsentry"),
           "Block capacity (kB)", "At risk, un-migratable", xdiv=1000.0)
     panel(axes[1], "burstiness-mean38", "surge_multiplier", "at_risk_fraction_legacy",
-          ORD, "Surge multiplier (mean 38 tx/s)",
+          ORD + FEE, "Surge multiplier (mean 38 tx/s)",
           "At risk, un-migratable")
     for ax in axes:
         ax.tick_params(labelsize=6)
         ax.xaxis.label.set_size(6.5)
         ax.yaxis.label.set_size(6.5)
-    legend(axes[0], ("ecdsa-only", "ecdsa-ordered", "falcon-only", "qsentry"), loc="center right", fontsize=5.5)
-    legend(axes[1], ORD, loc="upper left", fontsize=5.5)
+    legend(axes[0], ("ecdsa-only", "ecdsa-fee", "ecdsa-ordered", "falcon-only", "qsentry"),
+           loc="center right", fontsize=5)
+    legend(axes[1], ORD + FEE, loc="upper left", fontsize=5)
     fig.tight_layout(pad=0.4)
     fig.savefig(out_dir / "provisioning.pdf", **PDF)
     fig.savefig(out_dir / "provisioning.png", dpi=220, bbox_inches="tight")
@@ -401,7 +426,8 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
     plt.close(fig)
 
     # Figure 6: partial adoption, loss to an adversary that forges every expired spend
-    ad = data[(data.experiment == "adoption") & (data.arrival_rate == 32.0)]
+    ad = data[(data.experiment == "adoption") & (data.arrival_rate == 32.0)
+              & ~data.forger_fee.astype(bool)]
     if not ad.empty:
         el_ = ad.expired_last.astype(bool)
         series = [
@@ -462,10 +488,13 @@ def run(out_dir: Path, seeds: int, quick: bool, figures_only: bool = False,
             else:
                 w, pv = stats.wilcoxon(a, b, zero_method="wilcox", alternative="two-sided")
             pooled = np.sqrt((a.var(ddof=1) + b.var(ddof=1)) / 2.0)
+            sd_diff = (a - b).std(ddof=1)
             tests.append({"baseline": other, "metric": metric, "wilcoxon_w": w,
                           "p_value": pv, "mean_qsentry": a.mean(),
                           "mean_baseline": b.mean(),
-                          "cohens_d": (a.mean() - b.mean()) / pooled if pooled else float("nan")})
+                          "cohens_d": (a.mean() - b.mean()) / pooled if pooled else float("nan"),
+                          # paired effect size: mean difference over the s.d. of the differences
+                          "cohens_dz": (a - b).mean() / sd_diff if sd_diff else float("nan")})
     if not figures_only:
         pd.DataFrame(tests).to_csv(out_dir / "statistical_tests.csv", index=False,
                                    lineterminator="\n")

@@ -65,11 +65,11 @@ The nominal 32 tx/s is a mean of 49.8 tx/s, 85% of the 58.7 tx/s ECDSA capacity.
 | burstiness mean 30 tx/s, ecdsa-only, multipliers 1/2/4/6 | 0.0000 / 0.0000 / 0.0220 / 0.1275 |
 | burstiness mean 30 tx/s, ecdsa-ordered, multipliers 1/2/4/6 | 0.0000 / 0.0000 / 0.0060 / 0.0432 |
 | burstiness mean 30 tx/s, qsentry, multipliers 1/2/4/6 | 0.0000 / 0.0000 / 0.0060 / 0.0372 |
-| flood QSentry un-migr at risk, attack 0/5/10/20 | 0.0606 / 0.0743 / 0.0928 / 0.1376 |
-| flood ECDSA-only un-migr at risk, attack 0/5/10/20 | 0.2277 / 0.3172 / 0.4302 / 0.8898 |
-| flood ECDSA ordered un-migr at risk, attack 0/5/10/20 | 0.0661 / 0.0801 / 0.0965 / 0.1376 |
-| flood QSentry PQ inclusion, attack 0/5/10/20 | 0.9444 / 0.9358 / 0.8541 / nan |
-| flood attacker share of capacity at 20 tx/s (bound 0.341) | 0.3307 |
+| flood QSentry un-migr at risk, attack 0/5/10/20 | 0.0606 / 0.0742 / 0.0911 / 0.1303 |
+| flood ECDSA-only un-migr at risk, attack 0/5/10/20 | 0.2277 / 0.3113 / 0.4252 / 0.8805 |
+| flood ECDSA ordered un-migr at risk, attack 0/5/10/20 | 0.0661 / 0.0801 / 0.0948 / 0.1303 |
+| flood QSentry PQ inclusion, attack 0/5/10/20 | 0.9444 / 0.9370 / 0.8919 / 1.0000 |
+| flood attacker share of capacity at 20 tx/s (bound 0.341) | 0.3309 |
 | flood reservation 0.7, no attacker: un-migr at risk / PQ incl | 0.1260 / 0.9369 |
 | flood reservation 0.5, no attacker: un-migr at risk / PQ incl | 0.1415 / 0.9592 |
 | conceal ecdsa-only 26 tx/s commit-reveal=False: un-migr / incl / latency s / pending end | 0.2277 / 0.997 / 40 / 1260 |
@@ -105,6 +105,32 @@ The nominal 32 tx/s is a mean of 49.8 tx/s, 85% of the 58.7 tx/s ECDSA capacity.
 | horizon 38 tx/s QSentry, pending at end @200/1000/5000 | 19460 / 28204 / 37980 |
 | horizon 38 tx/s QSentry no budget, vuln at risk @200/1000/5000 blocks | 0.2053 / 0.1851 / 0.1756 |
 | horizon 38 tx/s QSentry no budget, pending at end @200/1000/5000 | 20553 / 40569 / 128344 |
+| fee model iid, 2 tiers: un-migr at risk fee / hybrid / triage; triage block value k+1 / 2^k | 0.3272 / 0.1489 / 0.1249; 0.80 / 0.80 |
+| fee model iid, 8 tiers: un-migr at risk fee / hybrid / triage; triage block value k+1 / 2^k | 0.2540 / 0.2058 / 0.1249; 0.65 / 0.35 |
+| fee model iid, 64 tiers: un-migr at risk fee / hybrid / triage; triage block value k+1 / 2^k | 0.2423 / 0.2361 / 0.1249; 0.62 / 0.14 |
+| fee model surge-high, 8 tiers: un-migr at risk fee / hybrid / triage; triage block value k+1 / 2^k | 0.3035 / 0.2389 / 0.1249; 0.77 / 0.46 |
+| fee model surge-low, 8 tiers: un-migr at risk fee / hybrid / triage; triage block value k+1 / 2^k | 0.2471 / 0.1792 / 0.1250; 0.74 / 0.64 |
+| fee model drain, 8 tiers: un-migr at risk fee / hybrid / triage; triage block value k+1 / 2^k | 0.2519 / 0.1778 / 0.1249; 0.81 / 0.49 |
+| fee model bump, 8 tiers: un-migr at risk fee / hybrid / triage; triage block value k+1 / 2^k | 0.5039 / 0.1388 / 0.1249; 0.84 / 0.72 |
+| break time assumed 15/30/45/60/90/120/240 s, true 60 s: un-migr at risk under triage | 0.2238 / 0.1813 / 0.1500 / 0.1249 / 0.2971 / 0.3513 / 0.4581 |
+| break time assumed 60 s, true 120/240/540 s: un-migr at risk under triage | 0.1241 / 0.1022 / 0.0557 |
+| adoption, vulnerable lost, triage, replacement kept, a = 0/0.1/0.25/0.5/0.75/0.9/1 | 0.5801 / 0.5193 / 0.4283 / 0.2894 / 0.1881 / 0.1480 / 0.1250 |
+| adoption, vulnerable lost, arrival order, replacement kept, a = 0/0.1/0.25/0.5/0.75/0.9/1 | 0.5801 / 0.5716 / 0.5584 / 0.5369 / 0.5188 / 0.5092 / 0.5038 |
+| adoption, vulnerable lost, tier hybrid with the forger's fee, replacement kept, a = 0/0.1/0.25/0.5/0.75/0.9/1 | 0.5801 / 0.5587 / 0.5387 / 0.5266 / 0.5249 / 0.5248 / 0.5249 |
+| adoption, vulnerable lost, triage + first-seen rule, a = 0/0.1/0.25/0.5/0.75/0.9/1 | 0.5801 / 0.5192 / 0.4281 / 0.2842 / 0.1457 / 0.0633 / 0.0000 |
+| adoption, vulnerable lost, arrival order + first-seen rule, a = 0/0.1/0.25/0.5/0.75/0.9/1 | 0.5801 / 0.5176 / 0.4238 / 0.2732 / 0.1324 / 0.0563 / 0.0000 |
+| adoption, vulnerable lost, fee order + first-seen rule, a = 0/0.1/0.25/0.5/0.75/0.9/1 | 0.5801 / 0.5288 / 0.4493 / 0.3092 / 0.1587 / 0.0687 / 0.0000 |
+| adoption, vulnerable lost, tier hybrid + first-seen rule, a = 0/0.1/0.25/0.5/0.75/0.9/1 | 0.5801 / 0.5293 / 0.4505 / 0.3110 / 0.1605 / 0.0696 / 0.0000 |
+| adoption by block value (first-seen) ecdsa-ordered, a = 0.25/0.5/0.75: share of blocks built; vulnerable lost | 0.183 / 0.402 / 0.669; 0.4873 / 0.3686 / 0.2148 |
+| adoption by block value (first-seen) ecdsa-only, a = 0.25/0.5/0.75: share of blocks built; vulnerable lost | 0.180 / 0.397 / 0.664; 0.4886 / 0.3668 / 0.2068 |
+| adoption by block value (inherit) ecdsa-ordered, a = 0.25/0.5/0.75: share of blocks built; vulnerable lost | 0.183 / 0.403 / 0.673; 0.4875 / 0.3694 / 0.2326 |
+| adoption by block value (inherit) ecdsa-only, a = 0.25/0.5/0.75: share of blocks built; vulnerable lost | 0.231 / 0.474 / 0.729; 0.5671 / 0.5492 / 0.5272 |
+| adversary with k = 1/11/100/1000 machines, 24 tx/s, ecdsa-only: share taken; share of value (tail index 1.5) | 0.0001 / 0.0007 / 0.0060 / 0.0534; 0.0066 / 0.0162 / 0.0350 / 0.0919 |
+| adversary with k = 1/11/100/1000 machines, 24 tx/s, ecdsa-fee: share taken; share of value (tail index 1.5) | 0.0001 / 0.0015 / 0.0130 / 0.0997; 0.0082 / 0.0198 / 0.0493 / 0.1145 |
+| adversary with k = 1/11/100/1000 machines, 24 tx/s, ecdsa-ordered: share taken; share of value (tail index 1.5) | 0.0001 / 0.0008 / 0.0073 / 0.0435; 0.0047 / 0.0110 / 0.0233 / 0.0449 |
+| adversary with k = 1/11/100/1000 machines, 32 tx/s, ecdsa-only: share taken; share of value (tail index 1.5) | 0.0002 / 0.0018 / 0.0159 / 0.1526; 0.0247 / 0.0610 / 0.1320 / 0.3104 |
+| adversary with k = 1/11/100/1000 machines, 32 tx/s, ecdsa-fee: share taken; share of value (tail index 1.5) | 0.0002 / 0.0022 / 0.0200 / 0.1655; 0.0172 / 0.0412 / 0.0933 / 0.2088 |
+| adversary with k = 1/11/100/1000 machines, 32 tx/s, ecdsa-ordered: share taken; share of value (tail index 1.5) | 0.0002 / 0.0020 / 0.0178 / 0.1138; 0.0118 / 0.0287 / 0.0617 / 0.1203 |
 
 ## Paired tests at the nominal load (QSentry against each variant)
 
@@ -161,4 +187,4 @@ The nominal 32 tx/s is a mean of 49.8 tx/s, 85% of the 58.7 tx/s ECDSA capacity.
 
 ---
 
-Generated from 10590 simulation runs across 18 experiments.
+Generated from 11310 simulation runs across 20 experiments.

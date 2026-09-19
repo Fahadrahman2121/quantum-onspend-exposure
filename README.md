@@ -1,7 +1,6 @@
-# Quantum exposure of blockchain transactions in transit
+# Racing the block: quantum on-spend exposure as a mempool deadline-scheduling problem
 
-Reproducibility artifact for **"Quantum Exposure of Blockchain Transactions in Transit:
-Fundamental Bounds and Adaptive Mempool Control."**
+Reproducibility artifact for **"Racing the Block: Quantum On-Spend Exposure as a Mempool Deadline-Scheduling Problem."**
 
 A transaction reveals its public key the moment it is broadcast and stops being attackable
 once it is recorded in a block. Recent resource estimates place a fast-clock
@@ -32,6 +31,19 @@ python verify.py
 `verify.py` reruns the suite into a temporary directory, compares every output against
 `results/manifest.json`, re-derives each quoted figure from `results/summary.csv`, and
 exits non-zero on any mismatch. Use `--numbers-only` to skip the rerun.
+
+## Additions of 19 September 2026 (evening, fourth review)
+
+One change touches reported numbers: the flood's Poisson draw now has its own random stream
+(`rng_flood`), so honest arrivals are identical at every attack rate and the flood experiment is
+paired; every other experiment reproduces the earlier numbers exactly. New in the model: a
+capacity-limited adversary (`adversary`, post-processing with 1, 11, 100 or 1000 machines that pick
+targets by value with knowledge of the future; `adv_count_k*`, `adv_value*_k*`), a heavy-tailed fee
+scale for block value (`block_value_ratio_geo`, tier k pays 2^k), senders who re-bid to the top tier
+as the deadline nears (`fee_model="bump"`), the tier hybrid with the forger's top fee when replacement
+is kept (`forger_fee`), and adopters who win a block in proportion to its value (`adopt_by_value`).
+The "oldest first" adoption variant was dropped: in an all-ECDSA pool it is arrival order.
+`statistical_tests.csv` gains the paired effect size `cohens_dz`.
 
 ## Corrections of 19 September 2026
 
@@ -80,7 +92,7 @@ python qsentry_sim.py --out results_published --seeds 30 --published
 | File | Contents |
 |---|---|
 | `qsentry_sim.py` | the model: credentials, mempool, block production, exposure accounting, and the closed-form exposure floor |
-| `suite.py` | eighteen experiments, six figures, paired statistical tests, and the manifest |
+| `suite.py` | twenty experiments, six figures, paired statistical tests, and the manifest |
 | `verify.py` | independent verification of both reproduction and the reported numbers |
 | `results/` | committed outputs, including a SHA-256 for every file |
 | `RESULTS.md` | every claim in the paper mapped to the exact number in the data |
@@ -90,7 +102,7 @@ python qsentry_sim.py --out results_published --seeds 30 --published
 
 ## Experiments
 
-`results/results.csv` carries an `experiment` column. The suite runs 10,590 configurations
+`results/results.csv` carries an `experiment` column. The suite runs 11,310 configurations
 across 30 independent seeds on 4 worker processes. Every run lasts 1,100 blocks with a 100-block
 warm-up and no mempool reset; exposure is measured over the cohort broadcast after warm-up,
 counting a vulnerable transaction still pending at the end and older than T_b as at risk.
@@ -98,23 +110,25 @@ The nominal load is 32 tx/s between surges (mean 49.8 tx/s, 85% of ECDSA capacit
 
 | Experiment | Runs | What it varies |
 |---|---|---|
-| `adoption` | 1350 | partial adoption: share of blocks built by adopters, five adopter orders, loss with a first-seen rule and with replacement kept |
+| `adoption` | 1350 | partial adoption: share of blocks built by adopters, four adopter orders and the tier hybrid with the forger's top fee, loss with a first-seen rule and with replacement kept |
 | `congestion` | 1200 | between-surge load 20-36 tx/s, the whole stable range, arrival order, fee order, triage order, blanket migrations with and without triage, QSentry |
 | `breaktime` | 1080 | adversary break time `T_b` |
 | `flood` | 840 | an adversarial flood of vulnerable transactions, a per-block reservation against it, and the same flood against fee order paying like everyone or the top fee |
 | `legacy` | 750 | the share of demand that cannot migrate |
 | `provisioning` | 750 | block capacity |
 | `chain` | 720 | block interval, isolating the theoretical floor |
-| `feemodel` | 540 | six fee models (2, 8, 64 independent tiers; surge senders bid high or low; bids follow the queue) for fee order, the tier hybrid and triage, with block value |
+| `feemodel` | 630 | seven fee models (2, 8, 64 independent tiers; surge senders bid high or low; bids follow the queue; senders re-bid to the top tier at half the break time) for fee order, the tier hybrid and triage, with block value |
+| `tb-misset` | 510 | a builder that sorts by a wrong break time while exposure is counted against the true one: assumed 15 to 240 s against a true 60 s, and assumed 60 s against a true 120, 240 and 540 s |
 | `burstiness-mean38` | 480 | demand surge multiplier with the long-run mean load held at 38 tx/s |
 | `burstiness-mean30` | 480 | demand surge multiplier with the long-run mean load held at 30 tx/s |
 | `conceal` | 480 | concealment by commit-reveal for migratable senders, alone and composed with triage ordering, plus probes |
-| `tb-misset` | 420 | a builder that sorts by a wrong break time while exposure is counted against the true 60 s |
+| `adoption-value` | 360 | partial adoption when block value decides who builds: the adopter wins a block in proportion to its share times the value of the block its order would build |
 | `epsilon` | 300 | the exposure target |
 | `aging` | 300 | bounded deferral for post-quantum transactions (tested and rejected) |
 | `horizon` | 300 | run length 200/1000/5000 blocks on a stable (32 tx/s) and an overloaded (38 tx/s) chain, 10 seeds |
 | `ablation` | 270 | mechanism ablations: no budget, no ordering, fixed weight, oldest-first ordering, ordering alone |
 | `verify` | 180 | verification budget (sensitivity check) |
+| `adversary` | 180 | a capacity-limited adversary with 1, 11, 100 or 1000 machines that picks targets by value with knowledge of the future, under arrival, fee and triage order, at 24 and 32 tx/s |
 | `v-sweep` | 150 | the cost-exposure weight `V` |
 
 ## Reference environment

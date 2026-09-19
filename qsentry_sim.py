@@ -43,6 +43,9 @@ CREDENTIALS = {
 }
 CRED_NAMES = tuple(CREDENTIALS)
 FEE_TIERS = 8   # discretisation of i.i.d. fees for the fee-priority baseline
+# Capacity-limited adversary: machines it runs, and tail indices of the value law.
+ADV_KS = (1, 11, 100, 1000)
+ADV_ALPHAS = (1.16, 1.5, 2.0)
 
 POLICIES = (
     "ecdsa-only",       # status quo
@@ -60,7 +63,7 @@ POLICIES = (
 )
 FEE_POLICIES = ("ecdsa-fee", "ecdsa-feetriage")
 TRIAGE_POLICIES = ("qsentry", "qsentry-no-vq", "ecdsa-ordered", "falcon-ordered", "mldsa-ordered")
-FEE_MODELS = ("iid", "surge-high", "surge-low", "drain")
+FEE_MODELS = ("iid", "surge-high", "surge-low", "drain", "bump")
 
 
 @dataclass(frozen=True)
@@ -116,7 +119,7 @@ class Config:
     # is its own cohort with its own payload, and the credential sizes of
     # Table I are added to the recorded envelope.  Empty string: synthetic.
     trace_name: str = ""
-    # Migration budget (Theorem 3).  A migratable sender is recommended a
+    # Migration budget (Proposition 2).  A migratable sender is recommended a
     # post-quantum credential only while the projected long-run byte load,
     # estimated from every arrival seen so far, stays below budget_margin of
     # block capacity.  False reproduces the unbudgeted controller, whose
@@ -160,6 +163,26 @@ class Config:
     # the true T_b is taken by its forgery, which outbids everything.  1.0
     # disables the model and reproduces the single-builder experiments.
     adopt_share: float = 1.0
+    # Who builds a block when block value decides.  "" draws an adopter with
+    # probability adopt_share.  Otherwise the adopter wins with probability
+    # a*Va / (a*Va + (1-a)*Vn), where Va is the value of the block its order
+    # would build and Vn that of the fee-ordering builder, forgeries included at
+    # the top fee.  "first-seen": the adopter declines the forger's fee.
+    # "inherit": it keeps replacement, so an expired spend it includes pays the
+    # top fee.
+    adopt_by_value: str = ""
+    # The tier hybrid with replacement kept: the forgery of a spend past the TRUE
+    # break time pays the top fee, so a builder that orders by fee between tiers
+    # moves it to the top tier.  False leaves it in the tier of its original.
+    forger_fee: bool = False
+    # Fee model "bump": an honest vulnerable sender re-bids to the top tier once
+    # its transaction has waited bump_at of the break time the builder assumes.
+    bump_at: float = 0.5
+    # Capacity-limited adversary.  True records every vulnerable inclusion and,
+    # after the run, lets an adversary with k machines (ADV_KS), each needing
+    # break_time_s per key, pick targets by value with knowledge of the future.
+    # It is post-processing: the queue is the one the honest order built.
+    adversary: bool = False
 
 
 # Recorded arrival traces for replay, registered by name so that a Config stays
@@ -179,7 +202,7 @@ def exposure_floor(break_time_s: float, block_interval_s: float) -> float:
     A transaction broadcast uniformly within a block period waits a residual
     block time before the next block can possibly include it, so its window is
     at least that residual.  With Poisson arrivals the residual is uniform on
-    [0, block_interval), giving the closed form below.  See Theorem 1.
+    [0, block_interval), giving the closed form below.  See Proposition 1.
     """
     if block_interval_s <= 0.0:
         return 0.0
@@ -227,6 +250,63 @@ def _tier_probs(model: str, tiers: int, in_surge: bool, queue_seconds: float, br
     return p / p.sum()
 
 
+def adversary_loss(pieces, break_time_s: float, block_interval_s: float, blocks: int, seed: int) -> dict:
+    """Loss to an adversary with k machines, each needing break_time_s per key.
+
+    `pieces` lists (disclosure time, inclusion time, count) for every honest
+    vulnerable transaction of the measured cohort; inclusion is inf when it was
+    still pending at the end.  The adversary knows the future: a machine free at
+    f may start on transaction i at max(f, a_i) and takes it if it is still
+    pending break_time_s later.  Free machines pick the most valuable feasible
+    target.  This bounds every k-machine adversary from above, whatever it can
+    predict, and is the same yardstick under every order.  Values are i.i.d.
+    Pareto, independent of everything else, so they are drawn here; one uniform
+    per transaction gives the same ranking under every tail index.
+    """
+    import heapq
+    out = {}
+    if not pieces:
+        return out
+    p = np.asarray(pieces, dtype=float)
+    cnt = p[:, 2].astype(np.int64)
+    arr = np.repeat(p[:, 0], cnt)
+    inc = np.repeat(p[:, 1], cnt)
+    n = len(arr)
+    u = np.random.default_rng([seed, 4]).random(n)
+    u = np.maximum(u, 1e-12)
+    totals = {al: float((u ** (-1.0 / al)).sum()) for al in ADV_ALPHAS}
+    feas = np.flatnonzero(inc - arr > break_time_s)
+    feas = feas[np.argsort(arr[feas], kind="stable")]
+    out["adv_feasible"] = len(feas) / n
+    fa, fi, fu = arr[feas].tolist(), inc[feas].tolist(), u[feas].tolist()
+    for k in ADV_KS:
+        free = [0.0] * k
+        heapq.heapify(free)
+        pool: list = []
+        ptr = 0
+        taken_u = []
+        for j in range(1, blocks + 1):
+            now = j * block_interval_s
+            while ptr < len(fa) and fa[ptr] <= now:
+                heapq.heappush(pool, (fu[ptr], ptr))
+                ptr += 1
+            while pool and free[0] <= now:
+                f = free[0]
+                uu, i = heapq.heappop(pool)
+                start = max(f, fa[i])
+                if fi[i] > start + break_time_s:
+                    heapq.heapreplace(free, start + break_time_s)
+                    taken_u.append(uu)
+                # otherwise no machine can finish it in time any more: later
+                # machines are free later still, so it is dropped for good
+        tu = np.asarray(taken_u, dtype=float)
+        out["adv_count_k%d" % k] = len(tu) / n
+        for al in ADV_ALPHAS:
+            out["adv_value%d_k%d" % (round(al * 100), k)] = \
+                float((tu ** (-1.0 / al)).sum()) / totals[al] if len(tu) else 0.0
+    return out
+
+
 def simulate(config: Config, keep_trace: bool = False):
     if config.policy not in POLICIES:
         raise ValueError(f"unknown policy: {config.policy}")
@@ -238,6 +318,8 @@ def simulate(config: Config, keep_trace: bool = False):
     # within a slot), rng_adopt decides which builder produces each block.
     rng_aux = np.random.default_rng([config.seed, 1])
     rng_adopt = np.random.default_rng([config.seed, 2])
+    # The flood has its own stream, so honest arrivals are the same at every attack rate.
+    rng_flood = np.random.default_rng([config.seed, 3])
     tiers = config.fee_tiers
     if tiers <= 0 and (config.policy in FEE_POLICIES or config.adopt_share < 1.0):
         tiers = FEE_TIERS
@@ -296,6 +378,8 @@ def simulate(config: Config, keep_trace: bool = False):
     lost = lost_unmig = 0               # taken by a forgery at a non-adopting builder
     window_max_vuln = 0.0
     value_sum = value_fee_sum = 0.0     # block value built, and what fee order would have built
+    value_geo_sum = value_fee_geo_sum = 0.0   # the same with tier k paying 2**k instead of k + 1
+    pieces: list = []                   # vulnerable inclusions, for the capacity-limited adversary
     adopter_blocks = measured_blocks = 0
 
     for slot in range(total_slots):
@@ -345,7 +429,7 @@ def simulate(config: Config, keep_trace: bool = False):
                     vulnerable = CREDENTIALS[cred]["vulnerable"]
                     if (not vulnerable) and config.migration_budget \
                             and config.policy in ("qsentry", "qsentry-no-vq"):
-                        # Theorem 3 budget: never recommend a credential that would
+                        # Proposition 2 budget: never recommend a credential that would
                         # push the projected long-run byte load past the margin.
                         b0 = tx_bytes("ecdsa", payload)
                         if now < config.block_interval_s or \
@@ -410,7 +494,7 @@ def simulate(config: Config, keep_trace: bool = False):
 
         # ---------------- adversarial flood ----------------
         if config.attack_rate > 0.0:
-            na = int(rng.poisson(config.attack_rate * slot_s))
+            na = int(rng_flood.poisson(config.attack_rate * slot_s))
             if na > 0:
                 ci = CRED_NAMES.index("ecdsa")
                 if tiers > 0 and config.attack_fee == "top":
@@ -434,26 +518,69 @@ def simulate(config: Config, keep_trace: bool = False):
             def is_vuln(e):
                 return e[4] != 2 and CREDENTIALS[CRED_NAMES[e[2]]]["vulnerable"]
 
+            top = tiers - 1
+            bump_age = config.bump_at * tb_builder
+
+            def eff_tier(e):
+                # "bump": an honest vulnerable sender has re-bid to the top tier.
+                if tiers > 0 and config.fee_model == "bump" and e[4] in (0, 3) and is_vuln(e) \
+                        and incl_t - e[0] >= bump_age:
+                    return top
+                return e[6]
+
+            def expired_true(e):
+                return e[4] in (0, 3) and is_vuln(e) and incl_t - e[0] > config.break_time_s
+
+            def dry_value(seq, val):
+                room = config.block_bytes
+                v = 0.0
+                for e in seq:
+                    k = min(int(e[1]), int(room // e[3]) if e[3] > 0 else int(e[1]))
+                    if k <= 0:
+                        break
+                    v += k * val(e)
+                    room -= k * e[3]
+                    if k < int(e[1]):
+                        break
+                return v
+
             adopter = True
             if config.adopt_share < 1.0:
-                adopter = rng_adopt.random() < config.adopt_share
+                draw = rng_adopt.random()
+                p_adopt = config.adopt_share
+                if config.adopt_by_value and 0.0 < config.adopt_share and len(mempool) > 0:
+                    # Block value decides who builds.  The adopter's order, dry:
+                    if config.policy in TRIAGE_POLICIES:
+                        a_key = lambda e: (1 if incl_t - e[0] > tb_builder else 0, e[0])
+                    elif config.policy == "ecdsa-fee":
+                        a_key = lambda e: (-eff_tier(e), e[0])
+                    elif config.policy == "ecdsa-feetriage":
+                        a_key = lambda e: (-eff_tier(e), 1 if incl_t - e[0] > tb_builder else 0, e[0])
+                    else:
+                        a_key = lambda e: e[0]
+                    if config.adopt_by_value == "inherit":
+                        a_val = lambda e: tiers if expired_true(e) else eff_tier(e) + 1
+                    else:
+                        a_val = lambda e: eff_tier(e) + 1
+                    v_a = dry_value(sorted(mempool, key=a_key), a_val)
+                    v_n = dry_value(sorted(mempool, key=lambda e: (0, e[0]) if expired_true(e)
+                                           else (1, -eff_tier(e), e[0])),
+                                    lambda e: tiers if expired_true(e) else eff_tier(e) + 1)
+                    w_a = config.adopt_share * v_a
+                    w_n = (1.0 - config.adopt_share) * v_n
+                    if w_a + w_n > 0.0:
+                        p_adopt = w_a / (w_a + w_n)
+                adopter = draw < p_adopt
             if measuring:
                 measured_blocks += 1
                 adopter_blocks += 1 if adopter else 0
             # What a fee-ordering builder would earn from this same mempool: the
             # yardstick for the block value the adopter's own order gives up.
-            fee_value = None
+            fee_value = fee_value_geo = None
             if tiers > 0 and measuring and adopter and config.policy != "ecdsa-fee":
-                room = config.block_bytes
-                fee_value = 0.0
-                for e in sorted(mempool, key=lambda e: (-e[6], e[0])):
-                    k = min(int(e[1]), int(room // e[3]) if e[3] > 0 else int(e[1]))
-                    if k <= 0:
-                        break
-                    fee_value += k * (e[6] + 1)
-                    room -= k * e[3]
-                    if k < int(e[1]):
-                        break
+                by_fee = sorted(mempool, key=lambda e: (-eff_tier(e), e[0]))
+                fee_value = dry_value(by_fee, lambda e: eff_tier(e) + 1)
+                fee_value_geo = dry_value(by_fee, lambda e: 2.0 ** eff_tier(e))
 
             if not adopter:
                 # A non-adopting builder: fee order, no conflict rule.  The forgery of
@@ -467,7 +594,7 @@ def simulate(config: Config, keep_trace: bool = False):
                     else:
                         rest.append(e)
                 forged.sort(key=lambda e: e[0])
-                rest.sort(key=lambda e: (-e[6], e[0]))
+                rest.sort(key=lambda e: (-eff_tier(e), e[0]))
                 ordered = deque(forged + rest)
             elif config.deadline_order and config.policy in TRIAGE_POLICIES and len(mempool) > 1:
                 # Vulnerable transactions carry a deadline at the break time;
@@ -547,7 +674,7 @@ def simulate(config: Config, keep_trace: bool = False):
                     ordered = vulnerable
             elif config.policy == "ecdsa-fee" and len(mempool) > 1:
                 # Class-blind fee priority: highest tier first, broadcast order inside a tier.
-                ordered = deque(sorted(mempool, key=lambda e: (-e[6], e[0])))
+                ordered = deque(sorted(mempool, key=lambda e: (-eff_tier(e), e[0])))
             elif config.policy == "ecdsa-feetriage" and len(mempool) > 1:
                 # Fee priority between tiers, triage inside a tier: the block holds the
                 # same tiers as under fee order, so it is worth the same to its builder.
@@ -555,7 +682,12 @@ def simulate(config: Config, keep_trace: bool = False):
                     if not is_vuln(e):
                         return 2
                     return 1 if incl_t - e[0] > tb_builder else 0
-                ordered = deque(sorted(mempool, key=lambda e: (-e[6], rank(e), e[0])))
+                def hybrid_tier(e):
+                    # With replacement kept, the forgery of an expired spend pays the top fee.
+                    if config.forger_fee and expired_true(e):
+                        return top
+                    return eff_tier(e)
+                ordered = deque(sorted(mempool, key=lambda e: (-hybrid_tier(e), rank(e), e[0])))
             elif config.adopt_share < 1.0 and len(mempool) > 1:
                 # Arrival order, restored after a non-adopter's block reordered the pool.
                 ordered = deque(sorted(mempool, key=lambda e: e[0]))
@@ -564,7 +696,7 @@ def simulate(config: Config, keep_trace: bool = False):
             budget = config.block_bytes
             vbudget = config.verify_budget_per_block
             block_risky = block_total = 0
-            block_value = 0.0
+            block_value = block_value_geo = 0.0
             misses = 0
             remaining: deque[list] = deque()
             reveals_next: list[list] = []
@@ -594,7 +726,8 @@ def simulate(config: Config, keep_trace: bool = False):
                 budget -= take * per
                 vbudget -= take * rel
                 pending_bytes -= take * per
-                block_value += take * (tier + 1)
+                block_value += take * (eff_tier(entry) + 1)
+                block_value_geo += take * 2.0 ** eff_tier(entry)
                 if kind == 2:
                     # A commit is included: nothing is disclosed, the
                     # transaction stays pending, and its reveal is broadcast
@@ -635,6 +768,8 @@ def simulate(config: Config, keep_trace: bool = False):
                         if risky:
                             at_risk += take
                         if name == "ecdsa":
+                            if config.adversary:
+                                pieces.append((arrival, incl_t, take))
                             included_legacy += take
                             window_sum_legacy += window * take
                             hist_legacy[idx] += take
@@ -663,9 +798,13 @@ def simulate(config: Config, keep_trace: bool = False):
             if fee_value is not None:
                 value_sum += block_value
                 value_fee_sum += fee_value
+                value_geo_sum += block_value_geo
+                value_fee_geo_sum += fee_value_geo
             elif tiers > 0 and measuring and adopter:
                 value_sum += block_value
                 value_fee_sum += block_value
+                value_geo_sum += block_value_geo
+                value_fee_geo_sum += block_value_geo
             mempool = remaining
             mempool.extend(reveals_next)
             excess = (block_risky - config.exposure_target * block_total) if block_total else 0.0
@@ -702,6 +841,8 @@ def simulate(config: Config, keep_trace: bool = False):
                 age = end_t - e[0]
                 j = min(max(int(np.searchsorted(edges, age, side="right") - 1), 0), len(hist) - 1)
                 hist_cens[j] += int(e[1])
+                if config.adversary:
+                    pieces.append((e[0], float("inf"), int(e[1])))
                 if age > config.break_time_s:
                     pend_vuln_old += int(e[1])
                     pend_unmig_old += int(e[7])
@@ -759,6 +900,8 @@ def simulate(config: Config, keep_trace: bool = False):
         # Value of the blocks built, relative to what fee order would have built
         # from the same mempool at each block (1.0 when no fees are modelled).
         "block_value_ratio": value_sum / value_fee_sum if value_fee_sum > 0 else 1.0,
+        # The same ratio when tier k pays 2**k: a heavy-tailed fee scale.
+        "block_value_ratio_geo": value_geo_sum / value_fee_geo_sum if value_fee_geo_sum > 0 else 1.0,
         "mean_pending_tx": backlog_area / measured_s,
         "bytes_per_tx": total_bytes / max(included, 1),
         "verify_per_tx": total_verify / max(included, 1),
@@ -775,6 +918,15 @@ def simulate(config: Config, keep_trace: bool = False):
     }
     for i, name in enumerate(CRED_NAMES):
         result[f"share_{name}"] = float(cred_counts[i]) / total_cred
+    # Capacity-limited adversary: the same keys in every run, NaN when not asked for.
+    adv = adversary_loss(pieces, config.break_time_s, config.block_interval_s,
+                         config.duration_blocks, config.seed) if config.adversary else {}
+    result["adv_feasible"] = adv.get("adv_feasible", float("nan"))
+    for k in ADV_KS:
+        result["adv_count_k%d" % k] = adv.get("adv_count_k%d" % k, float("nan"))
+        for al in ADV_ALPHAS:
+            key = "adv_value%d_k%d" % (round(al * 100), k)
+            result[key] = adv.get(key, float("nan"))
     return result, pd.DataFrame(trace)
 
 

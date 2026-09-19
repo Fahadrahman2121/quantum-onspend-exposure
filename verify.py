@@ -192,6 +192,45 @@ def derive(summary: Path) -> list[tuple[str, str]]:
                         " / ".join("%.4f" % v for v in sub[MV])))
             out.append(("horizon %g tx/s %s, pending at end @200/1000/5000" % (rate, lab),
                         " / ".join("%.0f" % v for v in sub["pending_measured_end_mean"])))
+    # ---- fee models, block value, a mis-set break time, partial adoption, k machines
+    fm = s[s.experiment == "feemodel"]
+    for model, nt in (("iid", 2), ("iid", 8), ("iid", 64), ("surge-high", 8), ("surge-low", 8), ("drain", 8), ("bump", 8)):
+        sub = fm[(fm.fee_model == model) & (fm.fee_tiers == nt)].set_index("policy")
+        out.append(("fee model %s, %d tiers: un-migr at risk fee / hybrid / triage; triage block value k+1 / 2^k" % (model, nt),
+                    "%.4f / %.4f / %.4f; %.2f / %.2f" % (sub.loc["ecdsa-fee", M], sub.loc["ecdsa-feetriage", M], sub.loc["ecdsa-ordered", M],
+                                                         sub.loc["ecdsa-ordered", "block_value_ratio_mean"],
+                                                         sub.loc["ecdsa-ordered", "block_value_ratio_geo_mean"])))
+    tb = s[(s.experiment == "tb-misset") & (s.policy == "ecdsa-ordered")]
+    fast = tb[tb.break_time_s == 60.0].sort_values("builder_break_time_s")
+    out.append(("break time assumed %s s, true 60 s: un-migr at risk under triage" % "/".join("%g" % v for v in fast.builder_break_time_s),
+                " / ".join("%.4f" % v for v in fast[M])))
+    slow = tb[tb.break_time_s > 60.0].sort_values("break_time_s")
+    out.append(("break time assumed 60 s, true %s s: un-migr at risk under triage" % "/".join("%g" % v for v in slow.break_time_s),
+                " / ".join("%.4f" % v for v in slow[M])))
+    ad = s[(s.experiment == "adoption") & (s.arrival_rate == 32.0)]
+    for lab, pol, ff, col in (("triage, replacement kept", "ecdsa-ordered", False, "lost_fraction_norule_vuln_mean"),
+                              ("arrival order, replacement kept", "ecdsa-only", False, "lost_fraction_norule_vuln_mean"),
+                              ("tier hybrid with the forger's fee, replacement kept", "ecdsa-feetriage", True, "lost_fraction_norule_vuln_mean"),
+                              ("triage + first-seen rule", "ecdsa-ordered", False, "lost_fraction_vuln_mean"),
+                              ("arrival order + first-seen rule", "ecdsa-only", False, "lost_fraction_vuln_mean"),
+                              ("fee order + first-seen rule", "ecdsa-fee", False, "lost_fraction_vuln_mean"),
+                              ("tier hybrid + first-seen rule", "ecdsa-feetriage", False, "lost_fraction_vuln_mean")):
+        sub = ad[(ad.policy == pol) & (ad.forger_fee == ff)].sort_values("adopt_share")
+        out.append(("adoption, vulnerable lost, %s, a = %s" % (lab, "/".join("%g" % v for v in sub.adopt_share)),
+                    " / ".join("%.4f" % v for v in sub[col])))
+    av = s[s.experiment == "adoption-value"]
+    for mode, col in (("first-seen", "lost_fraction_vuln_mean"), ("inherit", "lost_fraction_norule_vuln_mean")):
+        for pol in ("ecdsa-ordered", "ecdsa-only"):
+            sub = av[(av.adopt_by_value == mode) & (av.policy == pol)].sort_values("adopt_share")
+            out.append(("adoption by block value (%s) %s, a = 0.25/0.5/0.75: share of blocks built; vulnerable lost" % (mode, pol),
+                        " / ".join("%.3f" % v for v in sub["adopter_block_share_mean"]) + "; " + " / ".join("%.4f" % v for v in sub[col])))
+    adv = s[s.experiment == "adversary"]
+    for rate in (24.0, 32.0):
+        for pol in ("ecdsa-only", "ecdsa-fee", "ecdsa-ordered"):
+            r = adv[(adv.arrival_rate == rate) & (adv.policy == pol)].iloc[0]
+            out.append(("adversary with k = 1/11/100/1000 machines, %g tx/s, %s: share taken; share of value (tail index 1.5)" % (rate, pol),
+                        " / ".join("%.4f" % r["adv_count_k%d_mean" % k] for k in (1, 11, 100, 1000)) + "; "
+                        + " / ".join("%.4f" % r["adv_value150_k%d_mean" % k] for k in (1, 11, 100, 1000))))
     return out
 
 def main() -> int:
